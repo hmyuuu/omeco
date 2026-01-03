@@ -1,0 +1,17 @@
+[package]
+name = "omeco-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Python bindings for omeco tensor network contraction order optimization"
+publish = false
+
+[lib]
+name = "omeco_python"
+crate-type = ["cdylib"]
+
+[dependencies]
+omeco = { path = "../omeco" }
+pyo3 = { version = "0.23", features = ["extension-module"] }
+

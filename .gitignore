@@ -2,7 +2,20 @@
 /target/
 **/*.rs.bk
 *.pdb
-Cargo.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+*.whl
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
 
 # IDE
 .idea/
