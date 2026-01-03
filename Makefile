@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help build build-release check fmt fmt-check clippy test check-all clean doc doc-private serve-docs python-dev python-build python-test
+.PHONY: help build build-release check fmt fmt-check clippy test check-all clean doc doc-private serve-docs python-dev python-build python-test benchmark
 
 CARGO ?= cargo
 PYTHON ?= python3
@@ -24,6 +24,8 @@ help:
 	@printf "  python-dev    Build and install Python package locally\n"
 	@printf "  python-build  Build Python wheel\n"
 	@printf "  python-test   Run Python tests\n"
+	@printf "\nBenchmarks:\n"
+	@printf "  benchmark     Run Python vs Julia benchmark\n"
 
 build:
 	$(CARGO) build --workspace
@@ -72,3 +74,8 @@ python-build:
 
 python-test: python-dev
 	cd omeco-python && $(PYTHON) -m pytest -v
+
+# Benchmarks
+benchmark: python-dev
+	$(PYTHON) benchmarks/benchmark_python.py
+	cd benchmarks && julia --project=. benchmark_julia.jl
