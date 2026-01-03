@@ -5,6 +5,7 @@ edition = "2021"
 description = "Tensor network contraction order optimization"
 license = "MIT"
 repository = "https://github.com/your-username/omeco"
+readme = "README.md"
 keywords = ["tensor", "einsum", "optimization", "contraction"]
 categories = ["algorithms", "science"]
 rust-version = "1.70"

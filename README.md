@@ -1,4 +1,4 @@
-# omeco
+# One More Einsum Contraction Order (OMECO)
 
 [![CI](https://github.com/GiggleLiu/omeco/workflows/CI/badge.svg)](https://github.com/GiggleLiu/omeco/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/GiggleLiu/omeco/branch/master/graph/badge.svg)](https://codecov.io/gh/GiggleLiu/omeco)
@@ -53,6 +53,13 @@ let complexity = contraction_complexity(&optimized, &sizes, &code.ixs);
 println!("Time complexity: 2^{:.2}", complexity.tc);
 println!("Space complexity: 2^{:.2}", complexity.sc);
 ```
+
+## Documentation
+
+- `docs/index.md` for a project overview and design notes
+- `docs/tutorial.md` for step-by-step usage examples
+- `docs/algorithms.md` for optimizer details and tuning guidance
+- `docs/reference.md` for a concise API reference
 
 ## Algorithms
 
