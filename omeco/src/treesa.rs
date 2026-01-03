@@ -249,50 +249,107 @@ fn optimize_tree_sa<R: Rng>(
     decomp: DecompositionType,
     rng: &mut R,
 ) -> ExprTree {
-    // Pre-compute initial space complexity
-    let (_, mut sc_current, _) = tree_complexity(&tree, log2_sizes);
-    
     for &beta in betas {
         for _ in 0..niters {
-            tree = optimize_subtree(tree, beta, log2_sizes, score, decomp, sc_current, rng);
-            // Update sc after each iteration (lightweight recompute)
-            // The sc tracking is approximate but avoids full tree traversal
+            // Each iteration: randomly walk down and try ONE mutation
+            tree = random_walk_mutate(tree, beta, log2_sizes, score, decomp, rng);
         }
-        // Recompute sc at each temperature level for accuracy
-        let (_, sc, _) = tree_complexity(&tree, log2_sizes);
-        sc_current = sc;
     }
     tree
 }
 
-/// Recursively optimize a subtree using simulated annealing.
+/// Perform a random walk down the tree and try a mutation at a random node.
+/// This is the core SA step - ONE mutation attempt per call.
 #[inline]
-fn optimize_subtree<R: Rng>(
+fn random_walk_mutate<R: Rng>(
     tree: ExprTree,
     beta: f64,
     log2_sizes: &[f64],
     score: &ScoreFunction,
     decomp: DecompositionType,
-    sc_current: f64,
+    rng: &mut R,
+) -> ExprTree {
+    match tree {
+        ExprTree::Leaf(_) => tree,
+        ExprTree::Node { left, right, info } => {
+            // Randomly decide: try mutation here (50%) or descend (50%)
+            let left_is_leaf = left.is_leaf();
+            let right_is_leaf = right.is_leaf();
+            
+            // If both children are leaves, we must try to mutate here
+            if left_is_leaf && right_is_leaf {
+                // No applicable rules for (leaf, leaf), just return
+                return ExprTree::Node { left, right, info };
+            }
+            
+            // Randomly choose: mutate here or descend to a child
+            let choice = rng.random_range(0..3);
+            
+            if choice == 0 {
+                // Try to mutate at this node
+                let tree = ExprTree::Node { left, right, info };
+                try_mutate_node(tree, beta, log2_sizes, score, decomp, rng)
+            } else if choice == 1 && !left_is_leaf {
+                // Descend into left subtree
+                let new_left = random_walk_mutate(*left, beta, log2_sizes, score, decomp, rng);
+                ExprTree::Node {
+                    left: Box::new(new_left),
+                    right,
+                    info,
+                }
+            } else if !right_is_leaf {
+                // Descend into right subtree
+                let new_right = random_walk_mutate(*right, beta, log2_sizes, score, decomp, rng);
+                ExprTree::Node {
+                    left,
+                    right: Box::new(new_right),
+                    info,
+                }
+            } else if !left_is_leaf {
+                // Right was leaf, go left
+                let new_left = random_walk_mutate(*left, beta, log2_sizes, score, decomp, rng);
+                ExprTree::Node {
+                    left: Box::new(new_left),
+                    right,
+                    info,
+                }
+            } else {
+                // Both are leaves, try mutation here
+                let tree = ExprTree::Node { left, right, info };
+                try_mutate_node(tree, beta, log2_sizes, score, decomp, rng)
+            }
+        }
+    }
+}
+
+/// Try to apply a mutation rule at the given node.
+#[inline]
+fn try_mutate_node<R: Rng>(
+    tree: ExprTree,
+    beta: f64,
+    log2_sizes: &[f64],
+    score: &ScoreFunction,
+    decomp: DecompositionType,
     rng: &mut R,
 ) -> ExprTree {
     let rules = Rule::applicable_rules(&tree, decomp);
-
+    
     if rules.is_empty() {
         return tree;
     }
-
-    // Select a random rule using fast random selection
+    
+    // Select a random rule
     let rule = rules[rng.random_range(0..rules.len())];
-
+    
     // Compute the complexity change
     if let Some(diff) = rule_diff(&tree, rule, log2_sizes, score.rw_weight > 0.0) {
         // Compute energy change
         let dtc = diff.tc1 - diff.tc0;
-
-        // Use passed-in space complexity instead of recomputing
-        let sc_new = sc_current.max(sc_current + diff.dsc);
-
+        
+        // Get current space complexity for this local region
+        let (_, sc, _) = tree_complexity(&tree, log2_sizes);
+        let sc_new = sc.max(sc + diff.dsc);
+        
         // Energy change calculation
         let sc_penalty = if sc_new > score.sc_target {
             score.sc_weight
@@ -300,48 +357,20 @@ fn optimize_subtree<R: Rng>(
             0.0
         };
         let d_energy = sc_penalty * diff.dsc + dtc;
-
+        
         // Metropolis acceptance
         let accept = if d_energy <= 0.0 {
             true
         } else {
             rng.random::<f64>() < (-beta * d_energy).exp()
         };
-
+        
         if accept {
-            let new_tree = apply_rule(tree, rule, diff.new_labels);
-            // Recursively optimize children with updated sc
-            return optimize_children(new_tree, beta, log2_sizes, score, decomp, sc_new, rng);
+            return apply_rule(tree, rule, diff.new_labels);
         }
     }
-
-    // If not accepted, still try to optimize children
-    optimize_children(tree, beta, log2_sizes, score, decomp, sc_current, rng)
-}
-
-/// Optimize children of a tree node.
-#[inline]
-fn optimize_children<R: Rng>(
-    tree: ExprTree,
-    beta: f64,
-    log2_sizes: &[f64],
-    score: &ScoreFunction,
-    decomp: DecompositionType,
-    sc_current: f64,
-    rng: &mut R,
-) -> ExprTree {
-    match tree {
-        ExprTree::Leaf(_) => tree,
-        ExprTree::Node { left, right, info } => {
-            let new_left = optimize_subtree(*left, beta, log2_sizes, score, decomp, sc_current, rng);
-            let new_right = optimize_subtree(*right, beta, log2_sizes, score, decomp, sc_current, rng);
-            ExprTree::Node {
-                left: Box::new(new_left),
-                right: Box::new(new_right),
-                info,
-            }
-        }
-    }
+    
+    tree
 }
 
 /// Convert an ExprTree back to a NestedEinsum.
