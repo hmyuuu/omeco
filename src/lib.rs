@@ -3,87 +3,97 @@
 //! A Rust library for optimizing tensor network contraction orders, ported from
 //! the Julia package [OMEinsumContractionOrders.jl](https://github.com/TensorBFS/OMEinsumContractionOrders.jl).
 //!
-//! ## Overview
+//! This crate focuses on finding contraction orders and reporting complexity
+//! metrics. It does not perform tensor contraction itself.
 //!
-//! When contracting multiple tensors together, the order of contractions significantly
-//! affects the computational cost. Finding the optimal contraction order is NP-complete,
-//! but good heuristics can find near-optimal solutions quickly.
+//! ## Background
 //!
-//! This library provides two main optimization algorithms:
+//! A tensor network is a graph-like representation of a multilinear computation.
+//! Each tensor is a node, and each shared index is an edge (a hyperedge can connect
+//! more than two tensors). Contracting the network means summing over shared
+//! indices to evaluate the final result. The order of pairwise contractions
+//! has a major impact on time and memory costs.
 //!
-//! - **GreedyMethod**: Fast O(n² log n) greedy algorithm that iteratively contracts
-//!   the tensor pair with minimum cost.
-//!
-//! - **TreeSA**: Simulated annealing algorithm that searches for better contraction
-//!   orders by applying local tree mutations.
+//! Contraction orders are represented as binary trees: leaves are input tensors,
+//! internal nodes are intermediate contractions. Finding the optimal order is
+//! NP-complete, so practical tools focus on good heuristics.
 //!
 //! ## Quick Start
 //!
 //! ```rust
-//! use omeco::{EinCode, optimize_code, GreedyMethod, TreeSA, contraction_complexity};
-//! use std::collections::HashMap;
+//! use omeco::{EinCode, GreedyMethod, contraction_complexity, optimize_code, uniform_size_dict};
 //!
-//! // Define an einsum: matrix chain multiplication A[i,j] * B[j,k] * C[k,l] -> D[i,l]
 //! let code = EinCode::new(
 //!     vec![vec!['i', 'j'], vec!['j', 'k'], vec!['k', 'l']],
-//!     vec!['i', 'l']
+//!     vec!['i', 'l'],
 //! );
+//! let sizes = uniform_size_dict(&code, 16);
 //!
-//! // Define tensor dimensions
-//! let mut sizes = HashMap::new();
-//! sizes.insert('i', 100);
-//! sizes.insert('j', 200);
-//! sizes.insert('k', 50);
-//! sizes.insert('l', 100);
-//!
-//! // Optimize with greedy method (fast)
-//! let greedy_result = optimize_code(&code, &sizes, &GreedyMethod::default());
-//!
-//! // Optimize with TreeSA (higher quality)
-//! let treesa_result = optimize_code(&code, &sizes, &TreeSA::fast());
-//!
-//! // Check complexity of the optimized contraction
-//! if let Some(ref optimized) = greedy_result {
-//!     let complexity = contraction_complexity(optimized, &sizes, &code.ixs);
-//!     println!("Time complexity: 2^{:.2}", complexity.tc);
-//!     println!("Space complexity: 2^{:.2}", complexity.sc);
-//! }
+//! let optimized = optimize_code(&code, &sizes, &GreedyMethod::default())
+//!     .expect("optimizer failed");
+//! let metrics = contraction_complexity(&optimized, &sizes, &code.ixs);
+//! println!("time: 2^{:.2}", metrics.tc);
+//! println!("space: 2^{:.2}", metrics.sc);
 //! ```
-//!
-//! ## Complexity Metrics
-//!
-//! The library computes three complexity metrics:
-//!
-//! - **Time Complexity (tc)**: Log2 of the total FLOP count
-//! - **Space Complexity (sc)**: Log2 of the maximum intermediate tensor size
-//! - **Read-Write Complexity (rwc)**: Log2 of total I/O operations
 //!
 //! ## Algorithms
 //!
 //! ### GreedyMethod
 //!
-//! The greedy algorithm works by:
-//! 1. Building a hypergraph where vertices are tensors and edges are indices
-//! 2. Iteratively selecting the tensor pair with minimum contraction cost
-//! 3. Contracting the pair and updating the graph
+//! Repeatedly contracts the pair of tensors with the lowest cost. Time complexity
+//! is O(n² log n) for n tensors.
+//!
+//! The cost function is: `loss = size(output) - alpha * (size(input1) + size(input2))`
 //!
 //! Parameters:
 //! - `alpha`: Balances output size vs input size reduction (0.0 to 1.0)
-//! - `temperature`: Enables stochastic selection for escaping local minima
+//! - `temperature`: Enables stochastic selection via Boltzmann sampling (0.0 = deterministic)
 //!
 //! ### TreeSA
 //!
-//! The simulated annealing algorithm:
-//! 1. Initializes a contraction tree (using greedy or random)
-//! 2. Applies local mutations to the tree structure
-//! 3. Accepts or rejects changes based on the Metropolis criterion
-//! 4. Runs multiple trials in parallel and returns the best result
+//! Simulated annealing on contraction trees. Starts from an initial tree,
+//! applies local rewrites, and accepts/rejects changes via Metropolis criterion.
+//! Runs multiple trials in parallel (using rayon) and returns the best result.
 //!
 //! Parameters:
 //! - `betas`: Inverse temperature schedule
-//! - `ntrials`: Number of parallel trials
+//! - `ntrials`: Number of parallel trials (control threads via `RAYON_NUM_THREADS`)
 //! - `niters`: Iterations per temperature level
-//! - `score`: Scoring function for evaluating solutions
+//! - `score`: Scoring function balancing time, space, and read-write complexity
+//!
+//! Use [`GreedyMethod`] when you need speed; use [`TreeSA`] when contraction cost
+//! dominates and you can afford extra search time.
+//!
+//! ## Complexity Metrics
+//!
+//! Three metrics are computed (all in log2 scale):
+//!
+//! - **Time Complexity (tc)**: Total FLOP count
+//! - **Space Complexity (sc)**: Maximum intermediate tensor size
+//! - **Read-Write Complexity (rwc)**: Total I/O operations
+//!
+//! ## Slicing
+//!
+//! Slicing reduces peak memory by looping over selected indices, trading extra
+//! work for a smaller intermediate footprint. Use [`SlicedEinsum`] and
+//! [`sliced_complexity`] to model this trade-off.
+//!
+//! ```rust
+//! use omeco::{EinCode, GreedyMethod, SlicedEinsum, optimize_code, sliced_complexity, uniform_size_dict};
+//!
+//! let code = EinCode::new(
+//!     vec![vec!['i', 'j'], vec!['j', 'k']],
+//!     vec!['i', 'k'],
+//! );
+//! let sizes = uniform_size_dict(&code, 64);
+//!
+//! let optimized = optimize_code(&code, &sizes, &GreedyMethod::default())
+//!     .expect("optimizer failed");
+//! let sliced = SlicedEinsum::new(vec!['j'], optimized);
+//!
+//! let metrics = sliced_complexity(&sliced, &sizes, &code.ixs);
+//! println!("sliced space: 2^{:.2}", metrics.sc);
+//! ```
 
 pub mod complexity;
 pub mod eincode;

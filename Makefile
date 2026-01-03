@@ -18,7 +18,7 @@ help:
 	@printf "  check-all     Run fmt-check, clippy, and test\n"
 	@printf "  doc           Build rustdoc and open it\n"
 	@printf "  doc-private   Build rustdoc including private items\n"
-	@printf "  serve-docs    Serve rustdoc at http://%s:%s (DOC_CRATE=%s)\n" "$(DOC_HOST)" "$(DOC_PORT)" "$(DOC_CRATE)"
+	@printf "  serve-docs    Serve rustdoc at http://%s:%s/%s\n" "$(DOC_HOST)" "$(DOC_PORT)" "$(DOC_CRATE)"
 	@printf "  clean         Clean build artifacts\n"
 
 build:
@@ -53,8 +53,8 @@ doc-private:
 
 serve-docs:
 	$(CARGO) doc --no-deps --all-features
-	@echo "Serving rustdoc at http://$(DOC_HOST):$(DOC_PORT)"
-	$(PYTHON) -m http.server $(DOC_PORT) --directory target/doc/$(DOC_CRATE) --bind $(DOC_HOST)
+	@echo "Serving rustdoc at http://$(DOC_HOST):$(DOC_PORT)/$(DOC_CRATE)"
+	$(PYTHON) -m http.server $(DOC_PORT) --directory target/doc --bind $(DOC_HOST)
 
 clean:
 	$(CARGO) clean

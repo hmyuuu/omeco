@@ -28,8 +28,13 @@ omeco = "0.1"
 
 ## Quick Start
 
+Two core features are exposed in the quick start below: optimizing contraction
+orders and slicing for lower peak memory.
+
 ```rust
-use omeco::{EinCode, optimize_code, GreedyMethod, contraction_complexity};
+use omeco::{
+    EinCode, GreedyMethod, SlicedEinsum, contraction_complexity, optimize_code, sliced_complexity,
+};
 use std::collections::HashMap;
 
 // Matrix chain: A[i,j] * B[j,k] * C[k,l] -> D[i,l]
@@ -45,21 +50,22 @@ sizes.insert('j', 200);
 sizes.insert('k', 50);
 sizes.insert('l', 100);
 
-// Optimize contraction order
+// 1) Optimize contraction order
 let optimized = optimize_code(&code, &sizes, &GreedyMethod::default()).unwrap();
 
-// Check complexity
 let complexity = contraction_complexity(&optimized, &sizes, &code.ixs);
 println!("Time complexity: 2^{:.2}", complexity.tc);
 println!("Space complexity: 2^{:.2}", complexity.sc);
+
+// 2) Slice to reduce memory (trade time for space)
+let sliced = SlicedEinsum::new(vec!['j'], optimized);
+let sliced_complexity = sliced_complexity(&sliced, &sizes, &code.ixs);
+println!("Sliced space complexity: 2^{:.2}", sliced_complexity.sc);
 ```
 
 ## Documentation
 
-- `docs/index.md` for a project overview and design notes
-- `docs/tutorial.md` for step-by-step usage examples
-- `docs/algorithms.md` for optimizer details and tuning guidance
-- `docs/reference.md` for a concise API reference
+API documentation is available via `cargo doc --open` or at [docs.rs/omeco](https://docs.rs/omeco).
 
 ## Algorithms
 
