@@ -3,26 +3,47 @@
 //! A Rust library for optimizing tensor network contraction orders, ported from
 //! the Julia package [OMEinsumContractionOrders.jl](https://github.com/TensorBFS/OMEinsumContractionOrders.jl).
 //!
-//! This crate focuses on finding contraction orders and reporting complexity
-//! metrics. It does not perform tensor contraction itself.
+//! ## What is a Tensor Network?
 //!
-//! ## Background
+//! A *tensor network* represents multilinear transformations as hypergraphs.
+//! Arrays (tensors) are nodes, and shared indices are hyperedges connecting them.
+//! To *contract* a tensor network means evaluating the transformation by performing
+//! a sequence of pairwise tensor operations.
 //!
-//! A tensor network is a graph-like representation of a multilinear computation.
-//! Each tensor is a node, and each shared index is an edge (a hyperedge can connect
-//! more than two tensors). Contracting the network means summing over shared
-//! indices to evaluate the final result. The order of pairwise contractions
-//! has a major impact on time and memory costs.
+//! The computational cost—both time and memory—depends critically on the order
+//! of these operations. A specific ordering is called a *contraction order*, and
+//! finding an efficient one is *contraction order optimization*.
 //!
-//! Contraction orders are represented as binary trees: leaves are input tensors,
-//! internal nodes are intermediate contractions. Finding the optimal order is
-//! NP-complete, so practical tools focus on good heuristics.
+//! This framework appears across many domains: *einsum* notation in numerical
+//! computing, *factor graphs* in probabilistic inference, and *junction trees*
+//! in graphical models. Applications include quantum circuit simulation,
+//! quantum error correction, neural network compression, and combinatorial optimization.
 //!
-//! ## Quick Start
+//! Finding the optimal contraction order is NP-complete, but good heuristics
+//! can find near-optimal solutions quickly.
+//!
+//! ## Features
+//!
+//! This crate provides two main features:
+//!
+//! 1. **Contraction Order Optimization** — Find efficient orderings that minimize
+//!    time and/or space complexity
+//! 2. **Slicing** — Trade time for space by looping over selected indices
+//!
+//! ### Feature 1: Contraction Order Optimization
+//!
+//! A contraction order is represented as a binary tree where leaves are input
+//! tensors and internal nodes are intermediate results. The optimizer searches
+//! for trees that minimize a cost function balancing multiple objectives:
+//!
+//! - **Time complexity (tc)**: Total FLOP count (log2 scale)
+//! - **Space complexity (sc)**: Maximum intermediate tensor size (log2 scale)
+//! - **Read-write complexity (rwc)**: Total memory I/O (log2 scale)
 //!
 //! ```rust
 //! use omeco::{EinCode, GreedyMethod, contraction_complexity, optimize_code, uniform_size_dict};
 //!
+//! // Matrix chain: A[i,j] × B[j,k] × C[k,l] → D[i,l]
 //! let code = EinCode::new(
 //!     vec![vec!['i', 'j'], vec!['j', 'k'], vec!['k', 'l']],
 //!     vec!['i', 'l'],
@@ -36,47 +57,25 @@
 //! println!("space: 2^{:.2}", metrics.sc);
 //! ```
 //!
-//! ## Algorithms
+//! **Available optimizers:**
 //!
-//! ### GreedyMethod
+//! | Optimizer | Description |
+//! |-----------|-------------|
+//! | [`GreedyMethod`] | Fast O(n² log n) greedy heuristic |
+//! | [`TreeSA`] | Simulated annealing for higher-quality solutions |
 //!
-//! Repeatedly contracts the pair of tensors with the lowest cost. Time complexity
-//! is O(n² log n) for n tensors.
+//! Use [`GreedyMethod`] when you need speed; use [`TreeSA`] when contraction
+//! cost dominates and you can afford extra search time.
 //!
-//! The cost function is: `loss = size(output) - alpha * (size(input1) + size(input2))`
+//! ### Feature 2: Slicing
 //!
-//! Parameters:
-//! - `alpha`: Balances output size vs input size reduction (0.0 to 1.0)
-//! - `temperature`: Enables stochastic selection via Boltzmann sampling (0.0 = deterministic)
+//! *Slicing* trades time complexity for reduced space complexity by explicitly
+//! looping over a subset of tensor indices. This is useful when the optimal
+//! contraction order still exceeds available memory.
 //!
-//! ### TreeSA
-//!
-//! Simulated annealing on contraction trees. Starts from an initial tree,
-//! applies local rewrites, and accepts/rejects changes via Metropolis criterion.
-//! Runs multiple trials in parallel (using rayon) and returns the best result.
-//!
-//! Parameters:
-//! - `betas`: Inverse temperature schedule
-//! - `ntrials`: Number of parallel trials (control threads via `RAYON_NUM_THREADS`)
-//! - `niters`: Iterations per temperature level
-//! - `score`: Scoring function balancing time, space, and read-write complexity
-//!
-//! Use [`GreedyMethod`] when you need speed; use [`TreeSA`] when contraction cost
-//! dominates and you can afford extra search time.
-//!
-//! ## Complexity Metrics
-//!
-//! Three metrics are computed (all in log2 scale):
-//!
-//! - **Time Complexity (tc)**: Total FLOP count
-//! - **Space Complexity (sc)**: Maximum intermediate tensor size
-//! - **Read-Write Complexity (rwc)**: Total I/O operations
-//!
-//! ## Slicing
-//!
-//! Slicing reduces peak memory by looping over selected indices, trading extra
-//! work for a smaller intermediate footprint. Use [`SlicedEinsum`] and
-//! [`sliced_complexity`] to model this trade-off.
+//! For example, slicing index `j` with dimension 64 means running 64 smaller
+//! contractions and summing the results, reducing peak memory at the cost of
+//! more total work.
 //!
 //! ```rust
 //! use omeco::{EinCode, GreedyMethod, SlicedEinsum, optimize_code, sliced_complexity, uniform_size_dict};
@@ -89,11 +88,42 @@
 //!
 //! let optimized = optimize_code(&code, &sizes, &GreedyMethod::default())
 //!     .expect("optimizer failed");
-//! let sliced = SlicedEinsum::new(vec!['j'], optimized);
 //!
+//! // Slice over index 'j' to reduce memory
+//! let sliced = SlicedEinsum::new(vec!['j'], optimized);
 //! let metrics = sliced_complexity(&sliced, &sizes, &code.ixs);
 //! println!("sliced space: 2^{:.2}", metrics.sc);
 //! ```
+//!
+//! ## Algorithm Details
+//!
+//! ### GreedyMethod
+//!
+//! Repeatedly contracts the tensor pair with the lowest cost:
+//!
+//! ```text
+//! loss = size(output) - α × (size(input1) + size(input2))
+//! ```
+//!
+//! - `alpha` (0.0–1.0): Balances output size vs input size reduction
+//! - `temperature`: Enables stochastic selection via Boltzmann sampling (0 = deterministic)
+//!
+//! ### TreeSA
+//!
+//! Simulated annealing on contraction trees. Starts from an initial tree,
+//! applies local rewrites, and accepts/rejects via Metropolis criterion.
+//! Runs multiple trials in parallel using rayon.
+//!
+//! The scoring function balances objectives:
+//!
+//! ```text
+//! score = w_t × 2^tc + w_rw × 2^rwc + w_s × max(0, 2^sc - 2^sc_target)
+//! ```
+//!
+//! - `betas`: Inverse temperature schedule
+//! - `ntrials`: Parallel trials (control threads via `RAYON_NUM_THREADS`)
+//! - `niters`: Iterations per temperature level
+//! - `score`: [`ScoreFunction`] with weights and space target
 
 pub mod complexity;
 pub mod eincode;
