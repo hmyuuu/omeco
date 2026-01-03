@@ -1,0 +1,156 @@
+//! Scoring function for contraction order optimization.
+//!
+//! The score function balances time complexity, space complexity,
+//! and read-write complexity when evaluating contraction orders.
+
+use serde::{Deserialize, Serialize};
+
+/// Weighted scoring function for contraction quality evaluation.
+///
+/// The score is computed as:
+/// ```text
+/// score = tc_weight * 2^tc + rw_weight * 2^rw + sc_weight * max(0, 2^sc - 2^sc_target)
+/// ```
+///
+/// Where:
+/// - `tc` is the time complexity (log2 of FLOP count)
+/// - `sc` is the space complexity (log2 of max intermediate tensor size)
+/// - `rw` is the read-write complexity (log2 of total I/O operations)
+///
+/// # Example
+/// ```
+/// use omeco::ScoreFunction;
+///
+/// let score = ScoreFunction::default();
+/// let result = score.evaluate(10.0, 5.0, 8.0);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScoreFunction {
+    /// Weight for time complexity (default: 1.0)
+    pub tc_weight: f64,
+    /// Weight for space complexity penalty (default: 1.0)
+    pub sc_weight: f64,
+    /// Weight for read-write complexity (default: 0.0)
+    pub rw_weight: f64,
+    /// Target space complexity threshold (default: 20.0)
+    /// Space complexity is only penalized if it exceeds this target.
+    pub sc_target: f64,
+}
+
+impl Default for ScoreFunction {
+    fn default() -> Self {
+        Self {
+            tc_weight: 1.0,
+            sc_weight: 1.0,
+            rw_weight: 0.0,
+            sc_target: 20.0,
+        }
+    }
+}
+
+impl ScoreFunction {
+    /// Create a new ScoreFunction with custom weights.
+    pub fn new(tc_weight: f64, sc_weight: f64, rw_weight: f64, sc_target: f64) -> Self {
+        Self {
+            tc_weight,
+            sc_weight,
+            rw_weight,
+            sc_target,
+        }
+    }
+
+    /// Create a score function optimizing primarily for time complexity.
+    pub fn time_optimized() -> Self {
+        Self {
+            tc_weight: 1.0,
+            sc_weight: 0.0,
+            rw_weight: 0.0,
+            sc_target: f64::INFINITY,
+        }
+    }
+
+    /// Create a score function optimizing primarily for space complexity.
+    pub fn space_optimized(sc_target: f64) -> Self {
+        Self {
+            tc_weight: 0.0,
+            sc_weight: 1.0,
+            rw_weight: 0.0,
+            sc_target,
+        }
+    }
+
+    /// Evaluate the score for given complexity values.
+    ///
+    /// # Arguments
+    /// * `tc` - Time complexity (log2)
+    /// * `sc` - Space complexity (log2)
+    /// * `rw` - Read-write complexity (log2)
+    ///
+    /// # Returns
+    /// The weighted score value (lower is better).
+    pub fn evaluate(&self, tc: f64, sc: f64, rw: f64) -> f64 {
+        let tc_term = self.tc_weight * 2_f64.powf(tc);
+        let rw_term = self.rw_weight * 2_f64.powf(rw);
+        let sc_penalty = (2_f64.powf(sc) - 2_f64.powf(self.sc_target)).max(0.0);
+        let sc_term = self.sc_weight * sc_penalty;
+
+        tc_term + rw_term + sc_term
+    }
+
+    /// Check if space complexity exceeds the target.
+    #[inline]
+    pub fn exceeds_target(&self, sc: f64) -> bool {
+        sc > self.sc_target
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_score() {
+        let score = ScoreFunction::default();
+        assert_eq!(score.tc_weight, 1.0);
+        assert_eq!(score.sc_weight, 1.0);
+        assert_eq!(score.rw_weight, 0.0);
+        assert_eq!(score.sc_target, 20.0);
+    }
+
+    #[test]
+    fn test_evaluate_below_target() {
+        let score = ScoreFunction::default();
+        // tc=10, sc=5 (below target of 20), rw=8
+        let result = score.evaluate(10.0, 5.0, 8.0);
+        // Only tc contributes: 2^10 = 1024
+        assert!((result - 1024.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_evaluate_above_target() {
+        let score = ScoreFunction::new(1.0, 1.0, 0.0, 10.0);
+        // tc=10, sc=12 (above target of 10)
+        let result = score.evaluate(10.0, 12.0, 0.0);
+        // tc: 2^10 = 1024
+        // sc penalty: 2^12 - 2^10 = 4096 - 1024 = 3072
+        let expected = 1024.0 + 3072.0;
+        assert!((result - expected).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_time_optimized() {
+        let score = ScoreFunction::time_optimized();
+        assert_eq!(score.sc_weight, 0.0);
+        // Space penalty should be zero even with high sc
+        let result = score.evaluate(10.0, 100.0, 0.0);
+        assert!((result - 1024.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_exceeds_target() {
+        let score = ScoreFunction::default();
+        assert!(!score.exceeds_target(10.0));
+        assert!(!score.exceeds_target(20.0));
+        assert!(score.exceeds_target(21.0));
+    }
+}
