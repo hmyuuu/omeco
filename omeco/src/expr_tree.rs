@@ -4,7 +4,17 @@
 //! that can be modified by applying local mutation rules.
 
 use crate::utils::{fast_log2sumexp2, fast_log2sumexp2_3};
-use std::collections::HashSet;
+
+/// Cached complexity values for a subtree.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CachedComplexity {
+    /// Time complexity (log2)
+    pub tc: f64,
+    /// Space complexity (log2)
+    pub sc: f64,
+    /// Read-write complexity (log2)
+    pub rw: f64,
+}
 
 /// Information about an expression tree node.
 #[derive(Debug, Clone)]
@@ -13,6 +23,8 @@ pub struct ExprInfo {
     pub out_dims: Vec<usize>,
     /// Tensor ID if this is a leaf node, None otherwise
     pub tensor_id: Option<usize>,
+    /// Cached complexity values for this subtree (computed lazily)
+    pub cached: Option<CachedComplexity>,
 }
 
 impl ExprInfo {
@@ -21,6 +33,7 @@ impl ExprInfo {
         Self {
             out_dims,
             tensor_id: None,
+            cached: None,
         }
     }
 
@@ -29,6 +42,7 @@ impl ExprInfo {
         Self {
             out_dims,
             tensor_id: Some(tensor_id),
+            cached: None,
         }
     }
 }
@@ -159,11 +173,21 @@ pub enum Rule {
     Rule5,
 }
 
+/// Pre-allocated rule arrays to avoid heap allocations
+const RULES_NONE: &[Rule] = &[];
+const RULES_1_2: &[Rule] = &[Rule::Rule1, Rule::Rule2];
+const RULES_3_4: &[Rule] = &[Rule::Rule3, Rule::Rule4];
+const RULES_1_2_3_4: &[Rule] = &[Rule::Rule1, Rule::Rule2, Rule::Rule3, Rule::Rule4];
+const RULES_5: &[Rule] = &[Rule::Rule5];
+const RULES_1: &[Rule] = &[Rule::Rule1];
+
 impl Rule {
     /// Get the applicable rules for a tree node given the decomposition type.
-    pub fn applicable_rules(tree: &ExprTree, decomp: DecompositionType) -> Vec<Rule> {
+    /// Returns a static slice to avoid heap allocation.
+    #[inline]
+    pub fn applicable_rules(tree: &ExprTree, decomp: DecompositionType) -> &'static [Rule] {
         match tree {
-            ExprTree::Leaf(_) => Vec::new(),
+            ExprTree::Leaf(_) => RULES_NONE,
             ExprTree::Node { left, right, .. } => {
                 let left_is_leaf = left.is_leaf();
                 let right_is_leaf = right.is_leaf();
@@ -171,20 +195,20 @@ impl Rule {
                 match decomp {
                     DecompositionType::Tree => {
                         if left_is_leaf && right_is_leaf {
-                            Vec::new()
+                            RULES_NONE
                         } else if right_is_leaf {
-                            vec![Rule::Rule1, Rule::Rule2]
+                            RULES_1_2
                         } else if left_is_leaf {
-                            vec![Rule::Rule3, Rule::Rule4]
+                            RULES_3_4
                         } else {
-                            vec![Rule::Rule1, Rule::Rule2, Rule::Rule3, Rule::Rule4]
+                            RULES_1_2_3_4
                         }
                     }
                     DecompositionType::Path => {
                         if left_is_leaf {
-                            vec![Rule::Rule5]
+                            RULES_5
                         } else {
-                            vec![Rule::Rule1]
+                            RULES_1
                         }
                     }
                 }
@@ -193,12 +217,21 @@ impl Rule {
     }
 }
 
+/// Check if a slice contains an element (linear search, fast for small slices)
+#[inline(always)]
+fn slice_contains(slice: &[usize], elem: usize) -> bool {
+    slice.iter().any(|&x| x == elem)
+}
+
 /// Compute the time, space, and read-write complexity for a single contraction.
 ///
 /// Returns (tc, sc, rw) where:
 /// - tc: log2 of FLOP count
 /// - sc: log2 of output tensor size
 /// - rw: log2 of total read-write operations
+///
+/// Uses linear search instead of HashSet for small index arrays (typical tensor dimensions).
+#[inline]
 pub fn tcscrw(
     ix1: &[usize],
     ix2: &[usize],
@@ -206,9 +239,6 @@ pub fn tcscrw(
     log2_sizes: &[f64],
     compute_rw: bool,
 ) -> (f64, f64, f64) {
-    let ix2_set: HashSet<_> = ix2.iter().collect();
-    let iy_set: HashSet<_> = iy.iter().collect();
-
     // Size of input 1
     let sc1: f64 = ix1.iter().map(|&l| log2_sizes[l]).sum();
     // Size of input 2
@@ -217,9 +247,10 @@ pub fn tcscrw(
     let sc: f64 = iy.iter().map(|&l| log2_sizes[l]).sum();
 
     // Time complexity = output size + contracted indices
+    // Use linear search (faster for typical small tensor dimensions < 20)
     let mut tc = sc;
     for &l in ix1 {
-        if ix2_set.contains(&l) && !iy_set.contains(&l) {
+        if slice_contains(ix2, l) && !slice_contains(iy, l) {
             tc += log2_sizes[l];
         }
     }
@@ -235,23 +266,27 @@ pub fn tcscrw(
 }
 
 /// Compute the output labels for a contraction of two tensors.
+///
+/// Uses linear search instead of HashSet for small index arrays.
+#[inline]
 pub fn contraction_output(ix1: &[usize], ix2: &[usize], final_output: &[usize]) -> Vec<usize> {
-    let ix1_set: HashSet<_> = ix1.iter().collect();
-    let ix2_set: HashSet<_> = ix2.iter().collect();
-    let final_set: HashSet<_> = final_output.iter().collect();
-
-    let mut output = Vec::new();
+    // Pre-allocate with reasonable capacity
+    let mut output = Vec::with_capacity(ix1.len() + ix2.len());
 
     // Include labels that:
     // 1. Appear in only one input (external edges)
     // 2. Appear in both inputs AND in the final output (batched indices)
     for &l in ix1 {
-        if (!ix2_set.contains(&l) || final_set.contains(&l)) && !output.contains(&l) {
+        if (!slice_contains(ix2, l) || slice_contains(final_output, l))
+            && !slice_contains(&output, l)
+        {
             output.push(l);
         }
     }
     for &l in ix2 {
-        if (!ix1_set.contains(&l) || final_set.contains(&l)) && !output.contains(&l) {
+        if (!slice_contains(ix1, l) || slice_contains(final_output, l))
+            && !slice_contains(&output, l)
+        {
             output.push(l);
         }
     }
@@ -261,6 +296,11 @@ pub fn contraction_output(ix1: &[usize], ix2: &[usize], final_output: &[usize]) 
 
 /// Compute the total tree complexity (time, space, read-write).
 pub fn tree_complexity(tree: &ExprTree, log2_sizes: &[f64]) -> (f64, f64, f64) {
+    // Check if we have cached complexity
+    if let Some(cached) = tree.info().cached {
+        return (cached.tc, cached.sc, cached.rw);
+    }
+
     match tree {
         ExprTree::Leaf(info) => {
             let sc: f64 = info.out_dims.iter().map(|&l| log2_sizes[l]).sum();
@@ -282,6 +322,57 @@ pub fn tree_complexity(tree: &ExprTree, log2_sizes: &[f64]) -> (f64, f64, f64) {
                 sc.max(scl).max(scr),
                 fast_log2sumexp2_3(rw, rwl, rwr),
             )
+        }
+    }
+}
+
+/// Compute and cache tree complexity, returning a mutable reference for updates.
+pub fn tree_complexity_cached(tree: &mut ExprTree, log2_sizes: &[f64]) -> CachedComplexity {
+    // If already cached, return it
+    if let Some(cached) = tree.info().cached {
+        return cached;
+    }
+
+    let (tc, sc, rw) = match tree {
+        ExprTree::Leaf(info) => {
+            let sc: f64 = info.out_dims.iter().map(|&l| log2_sizes[l]).sum();
+            (f64::NEG_INFINITY, sc, f64::NEG_INFINITY)
+        }
+        ExprTree::Node { left, right, info } => {
+            let left_cached = tree_complexity_cached(left, log2_sizes);
+            let right_cached = tree_complexity_cached(right, log2_sizes);
+            let (tc, sc, rw) = tcscrw(
+                left.labels(),
+                right.labels(),
+                &info.out_dims,
+                log2_sizes,
+                true,
+            );
+
+            (
+                fast_log2sumexp2_3(tc, left_cached.tc, right_cached.tc),
+                sc.max(left_cached.sc).max(right_cached.sc),
+                fast_log2sumexp2_3(rw, left_cached.rw, right_cached.rw),
+            )
+        }
+    };
+
+    let cached = CachedComplexity { tc, sc, rw };
+    tree.info_mut().cached = Some(cached);
+    cached
+}
+
+/// Quickly compute only the space complexity for a tree.
+/// This is an optimized version that skips tc and rw computation.
+#[inline]
+pub fn tree_sc_only(tree: &ExprTree, log2_sizes: &[f64]) -> f64 {
+    match tree {
+        ExprTree::Leaf(info) => info.out_dims.iter().map(|&l| log2_sizes[l]).sum(),
+        ExprTree::Node { left, right, info } => {
+            let scl = tree_sc_only(left, log2_sizes);
+            let scr = tree_sc_only(right, log2_sizes);
+            let sc: f64 = info.out_dims.iter().map(|&l| log2_sizes[l]).sum();
+            sc.max(scl).max(scr)
         }
     }
 }
@@ -343,16 +434,14 @@ pub fn rule_diff(
                             };
 
                             // New structure depends on rule
-                            let (new_left_labels, new_labels) = match rule {
+                            let new_labels = match rule {
                                 Rule::Rule1 => {
                                     // ((a,c),b) -> ac_labels
-                                    let ac = contraction_output(a.labels(), c.labels(), d);
-                                    (ac.clone(), ac)
+                                    contraction_output(a.labels(), c.labels(), d)
                                 }
                                 Rule::Rule2 => {
                                     // ((c,b),a) -> cb_labels
-                                    let cb = contraction_output(c.labels(), b.labels(), d);
-                                    (cb.clone(), cb)
+                                    contraction_output(c.labels(), b.labels(), d)
                                 }
                                 _ => unreachable!(),
                             };
@@ -362,14 +451,14 @@ pub fn rule_diff(
                                 Rule::Rule1 => tcscrw(
                                     a.labels(),
                                     c.labels(),
-                                    &new_left_labels,
+                                    &new_labels,
                                     log2_sizes,
                                     compute_rw,
                                 ),
                                 Rule::Rule2 => tcscrw(
                                     c.labels(),
                                     b.labels(),
-                                    &new_left_labels,
+                                    &new_labels,
                                     log2_sizes,
                                     compute_rw,
                                 ),
@@ -378,10 +467,10 @@ pub fn rule_diff(
 
                             let (tc_new_d, sc_new_d, rw_new_d) = match rule {
                                 Rule::Rule1 => {
-                                    tcscrw(&new_left_labels, b.labels(), d, log2_sizes, compute_rw)
+                                    tcscrw(&new_labels, b.labels(), d, log2_sizes, compute_rw)
                                 }
                                 Rule::Rule2 => {
-                                    tcscrw(&new_left_labels, a.labels(), d, log2_sizes, compute_rw)
+                                    tcscrw(&new_labels, a.labels(), d, log2_sizes, compute_rw)
                                 }
                                 _ => unreachable!(),
                             };
@@ -431,16 +520,14 @@ pub fn rule_diff(
                             };
 
                             // New structure depends on rule
-                            let (new_right_labels, new_labels) = match rule {
+                            let new_labels = match rule {
                                 Rule::Rule3 => {
                                     // (b,(a,c)) -> ac_labels
-                                    let ac = contraction_output(a.labels(), c.labels(), d);
-                                    (ac.clone(), ac)
+                                    contraction_output(a.labels(), c.labels(), d)
                                 }
                                 Rule::Rule4 => {
                                     // (c,(b,a)) -> ba_labels
-                                    let ba = contraction_output(b.labels(), a.labels(), d);
-                                    (ba.clone(), ba)
+                                    contraction_output(b.labels(), a.labels(), d)
                                 }
                                 _ => unreachable!(),
                             };
@@ -450,14 +537,14 @@ pub fn rule_diff(
                                 Rule::Rule3 => tcscrw(
                                     a.labels(),
                                     c.labels(),
-                                    &new_right_labels,
+                                    &new_labels,
                                     log2_sizes,
                                     compute_rw,
                                 ),
                                 Rule::Rule4 => tcscrw(
                                     b.labels(),
                                     a.labels(),
-                                    &new_right_labels,
+                                    &new_labels,
                                     log2_sizes,
                                     compute_rw,
                                 ),
@@ -466,10 +553,10 @@ pub fn rule_diff(
 
                             let (tc_new_d, sc_new_d, rw_new_d) = match rule {
                                 Rule::Rule3 => {
-                                    tcscrw(b.labels(), &new_right_labels, d, log2_sizes, compute_rw)
+                                    tcscrw(b.labels(), &new_labels, d, log2_sizes, compute_rw)
                                 }
                                 Rule::Rule4 => {
-                                    tcscrw(c.labels(), &new_right_labels, d, log2_sizes, compute_rw)
+                                    tcscrw(c.labels(), &new_labels, d, log2_sizes, compute_rw)
                                 }
                                 _ => unreachable!(),
                             };

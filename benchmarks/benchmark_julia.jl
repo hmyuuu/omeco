@@ -7,11 +7,12 @@ Uses OMEinsumContractionOrders.jl
 using OMEinsumContractionOrders
 using OMEinsum
 using Printf
+using Random
 
 # Test cases: increasingly complex tensor networks
 function chain_network(n::Int, d::Int)
     """Matrix chain of n matrices"""
-    labels = [Symbol("i$i") for i in 1:n+1]
+    labels = collect(1:n+1)
     ixs = [[labels[i], labels[i+1]] for i in 1:n]
     iy = [labels[1], labels[end]]
     sizes = Dict(l => d for l in labels)
@@ -20,40 +21,51 @@ end
 
 function grid_network(rows::Int, cols::Int, d::Int)
     """2D grid tensor network (like PEPS)"""
-    function edge_h(r, c)
-        return Symbol("h$(r)_$(c)")  # horizontal
-    end
-    function edge_v(r, c)
-        return Symbol("v$(r)_$(c)")  # vertical
+    label = 1
+    h_edge_map = Dict{Tuple{Int,Int}, Int}()
+    v_edge_map = Dict{Tuple{Int,Int}, Int}()
+    
+    for r in 1:rows
+        for c in 1:cols-1
+            h_edge_map[(r, c)] = label
+            label += 1
+        end
     end
     
-    ixs = Vector{Vector{Symbol}}()
-    sizes = Dict{Symbol, Int}()
+    for r in 1:rows-1
+        for c in 1:cols
+            v_edge_map[(r, c)] = label
+            label += 1
+        end
+    end
+    
+    ixs = Vector{Vector{Int}}()
+    sizes = Dict{Int, Int}()
     
     for r in 1:rows
         for c in 1:cols
-            tensor_ixs = Symbol[]
+            tensor_ixs = Int[]
             # Left edge
             if c > 1
-                e = edge_h(r, c-1)
+                e = h_edge_map[(r, c-1)]
                 push!(tensor_ixs, e)
                 sizes[e] = d
             end
             # Right edge  
             if c < cols
-                e = edge_h(r, c)
+                e = h_edge_map[(r, c)]
                 push!(tensor_ixs, e)
                 sizes[e] = d
             end
             # Top edge
             if r > 1
-                e = edge_v(r-1, c)
+                e = v_edge_map[(r-1, c)]
                 push!(tensor_ixs, e)
                 sizes[e] = d
             end
             # Bottom edge
             if r < rows
-                e = edge_v(r, c)
+                e = v_edge_map[(r, c)]
                 push!(tensor_ixs, e)
                 sizes[e] = d
             end
@@ -61,7 +73,45 @@ function grid_network(rows::Int, cols::Int, d::Int)
         end
     end
     
-    iy = Symbol[]  # scalar output
+    iy = Int[]  # scalar output
+    return ixs, iy, sizes
+end
+
+function random_regular_graph(n::Int, degree::Int, d::Int; seed::Int=42)
+    """
+    Random regular graph tensor network.
+    Each vertex is a tensor with `degree` indices.
+    """
+    Random.seed!(seed)
+    
+    # Generate random regular graph using configuration model
+    half_edges = Int[]
+    for v in 1:n
+        for _ in 1:degree
+            push!(half_edges, v)
+        end
+    end
+    
+    shuffle!(half_edges)
+    
+    # Pair up half-edges to form edges
+    edge_label = 1
+    vertex_edges = Dict{Int, Vector{Int}}(v => Int[] for v in 1:n)
+    
+    for i in 1:2:length(half_edges)
+        v1, v2 = half_edges[i], half_edges[i + 1]
+        # Skip self-loops
+        if v1 != v2
+            push!(vertex_edges[v1], edge_label)
+            push!(vertex_edges[v2], edge_label)
+            edge_label += 1
+        end
+    end
+    
+    ixs = [vertex_edges[v] for v in 1:n if !isempty(vertex_edges[v])]
+    sizes = Dict(e => d for e in 1:edge_label-1)
+    iy = Int[]  # scalar output
+    
     return ixs, iy, sizes
 end
 
@@ -133,15 +183,19 @@ function main()
     ixs, iy, sizes = grid_network(5, 5, 2)
     results["grid_5x5"] = run_benchmark("Grid 5x5", ixs, iy, sizes, ntrials=10, niters=100)
     
+    # Random 3-regular graph n=250
+    ixs, iy, sizes = random_regular_graph(250, 3, 2)
+    results["reg3_250"] = run_benchmark("Random 3-regular n=250", ixs, iy, sizes, ntrials=10, niters=100)
+    
     # Summary
     println("=" ^ 60)
     println("Summary (Julia):")
     println("-" ^ 60)
-    println("Problem         Greedy (ms)     TreeSA (ms)    ")
+    @printf("%-20s %-15s %-15s\n", "Problem", "Greedy (ms)", "TreeSA (ms)")
     println("-" ^ 60)
-    for name in ["chain_10", "grid_4x4", "grid_5x5"]
+    for name in ["chain_10", "grid_4x4", "grid_5x5", "reg3_250"]
         r = results[name]
-        @printf("%-15s %-15.3f %-15.2f\n", name, r.greedy_avg, r.treesa_avg)
+        @printf("%-20s %-15.3f %-15.2f\n", name, r.greedy_avg, r.treesa_avg)
     end
 end
 

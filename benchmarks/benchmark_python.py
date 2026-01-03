@@ -2,59 +2,42 @@
 """
 Benchmark TreeSA contraction order optimization in Python.
 Uses omeco (Rust via PyO3)
-
-Note: The Rust bindings use single-character labels.
 """
 
 import time
-import string
+import random
 from typing import Dict, List, Tuple
 
-# Character pool for labels (62 chars: a-z, A-Z, 0-9)
-CHARS = string.ascii_lowercase + string.ascii_uppercase + string.digits
 
-
-def chain_network(n: int, d: int) -> Tuple[List[List[str]], List[str], Dict[str, int]]:
-    """Matrix chain of n matrices. Requires n+1 <= 62 labels."""
-    if n + 1 > len(CHARS):
-        raise ValueError(f"Chain too long: need {n+1} labels, have {len(CHARS)}")
-    labels = list(CHARS[: n + 1])
+def chain_network(n: int, d: int) -> Tuple[List[List[int]], List[int], Dict[int, int]]:
+    """Matrix chain of n matrices."""
+    labels = list(range(n + 1))
     ixs = [[labels[i], labels[i + 1]] for i in range(n)]
     iy = [labels[0], labels[-1]]
     sizes = {l: d for l in labels}
     return ixs, iy, sizes
 
 
-def grid_network(rows: int, cols: int, d: int) -> Tuple[List[List[str]], List[str], Dict[str, int]]:
-    """
-    2D grid tensor network (like PEPS).
-    Number of edges: (rows-1)*cols + rows*(cols-1) horizontal + vertical edges.
-    """
+def grid_network(rows: int, cols: int, d: int) -> Tuple[List[List[int]], List[int], Dict[int, int]]:
+    """2D grid tensor network (like PEPS)."""
     # Count edges
     h_edges = rows * (cols - 1)  # horizontal edges
     v_edges = (rows - 1) * cols  # vertical edges
-    total_edges = h_edges + v_edges
     
-    if total_edges > len(CHARS):
-        raise ValueError(f"Grid too large: need {total_edges} labels, have {len(CHARS)}")
-    
-    # Assign characters to edges
-    edge_chars = list(CHARS[:total_edges])
-    char_idx = 0
-    
-    # Map (edge_type, r, c) -> char
+    # Assign integer labels to edges
+    label = 0
     h_edge_map = {}  # horizontal edge from (r, c) to (r, c+1)
     v_edge_map = {}  # vertical edge from (r, c) to (r+1, c)
     
     for r in range(rows):
         for c in range(cols - 1):
-            h_edge_map[(r, c)] = edge_chars[char_idx]
-            char_idx += 1
+            h_edge_map[(r, c)] = label
+            label += 1
     
     for r in range(rows - 1):
         for c in range(cols):
-            v_edge_map[(r, c)] = edge_chars[char_idx]
-            char_idx += 1
+            v_edge_map[(r, c)] = label
+            label += 1
     
     ixs = []
     sizes = {}
@@ -82,14 +65,52 @@ def grid_network(rows: int, cols: int, d: int) -> Tuple[List[List[str]], List[st
                 e = v_edge_map[(r, c)]
                 tensor_ixs.append(e)
                 sizes[e] = d
-            if tensor_ixs:  # Skip if no edges (shouldn't happen for grid > 1x1)
+            if tensor_ixs:
                 ixs.append(tensor_ixs)
     
     iy = []  # scalar output
     return ixs, iy, sizes
 
 
-def run_benchmark(name: str, ixs, iy, sizes, ntrials=10, niters=50):
+def random_regular_graph(n: int, degree: int, d: int, seed: int = 42) -> Tuple[List[List[int]], List[int], Dict[int, int]]:
+    """
+    Random regular graph tensor network.
+    
+    Each vertex is a tensor with `degree` indices.
+    Total edges = n * degree / 2.
+    """
+    random.seed(seed)
+    
+    # Generate random regular graph using configuration model
+    # Each vertex has `degree` half-edges
+    half_edges = []
+    for v in range(n):
+        for _ in range(degree):
+            half_edges.append(v)
+    
+    random.shuffle(half_edges)
+    
+    # Pair up half-edges to form edges
+    edges = []
+    edge_label = 0
+    vertex_edges: Dict[int, List[int]] = {v: [] for v in range(n)}
+    
+    for i in range(0, len(half_edges), 2):
+        v1, v2 = half_edges[i], half_edges[i + 1]
+        # Skip self-loops and multi-edges for simplicity
+        if v1 != v2:
+            vertex_edges[v1].append(edge_label)
+            vertex_edges[v2].append(edge_label)
+            edge_label += 1
+    
+    ixs = [vertex_edges[v] for v in range(n) if vertex_edges[v]]
+    sizes = {e: d for e in range(edge_label)}
+    iy = []  # scalar output
+    
+    return ixs, iy, sizes
+
+
+def run_benchmark(name: str, ixs, iy, sizes, ntrials=1, niters=50):
     from omeco import (
         GreedyMethod,
         TreeSA,
@@ -159,20 +180,24 @@ def main():
     
     # Medium: small grid
     ixs, iy, sizes = grid_network(4, 4, 2)
-    results["grid_4x4"] = run_benchmark("Grid 4x4", ixs, iy, sizes, ntrials=10, niters=100)
+    results["grid_4x4"] = run_benchmark("Grid 4x4", ixs, iy, sizes, ntrials=1, niters=100)
     
     # Large: bigger grid  
     ixs, iy, sizes = grid_network(5, 5, 2)
-    results["grid_5x5"] = run_benchmark("Grid 5x5", ixs, iy, sizes, ntrials=10, niters=100)
+    results["grid_5x5"] = run_benchmark("Grid 5x5", ixs, iy, sizes, ntrials=1, niters=100)
+    
+    # Random 3-regular graph n=250
+    ixs, iy, sizes = random_regular_graph(250, 3, 2)
+    results["reg3_250"] = run_benchmark("Random 3-regular n=250", ixs, iy, sizes, ntrials=1, niters=100)
     
     # Summary
     print("=" * 60)
     print("Summary (Python/Rust):")
     print("-" * 60)
-    print(f"{'Problem':<15} {'Greedy (ms)':<15} {'TreeSA (ms)':<15}")
+    print(f"{'Problem':<20} {'Greedy (ms)':<15} {'TreeSA (ms)':<15}")
     print("-" * 60)
     for name, r in results.items():
-        print(f"{name:<15} {r['greedy_avg_ms']:<15.3f} {r['treesa_avg_ms']:<15.2f}")
+        print(f"{name:<20} {r['greedy_avg_ms']:<15.3f} {r['treesa_avg_ms']:<15.2f}")
 
 
 if __name__ == "__main__":

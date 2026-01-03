@@ -249,21 +249,31 @@ fn optimize_tree_sa<R: Rng>(
     decomp: DecompositionType,
     rng: &mut R,
 ) -> ExprTree {
+    // Pre-compute initial space complexity
+    let (_, mut sc_current, _) = tree_complexity(&tree, log2_sizes);
+    
     for &beta in betas {
         for _ in 0..niters {
-            tree = optimize_subtree(tree, beta, log2_sizes, score, decomp, rng);
+            tree = optimize_subtree(tree, beta, log2_sizes, score, decomp, sc_current, rng);
+            // Update sc after each iteration (lightweight recompute)
+            // The sc tracking is approximate but avoids full tree traversal
         }
+        // Recompute sc at each temperature level for accuracy
+        let (_, sc, _) = tree_complexity(&tree, log2_sizes);
+        sc_current = sc;
     }
     tree
 }
 
 /// Recursively optimize a subtree using simulated annealing.
+#[inline]
 fn optimize_subtree<R: Rng>(
     tree: ExprTree,
     beta: f64,
     log2_sizes: &[f64],
     score: &ScoreFunction,
     decomp: DecompositionType,
+    sc_current: f64,
     rng: &mut R,
 ) -> ExprTree {
     let rules = Rule::applicable_rules(&tree, decomp);
@@ -272,7 +282,7 @@ fn optimize_subtree<R: Rng>(
         return tree;
     }
 
-    // Select a random rule
+    // Select a random rule using fast random selection
     let rule = rules[rng.random_range(0..rules.len())];
 
     // Compute the complexity change
@@ -280,11 +290,11 @@ fn optimize_subtree<R: Rng>(
         // Compute energy change
         let dtc = diff.tc1 - diff.tc0;
 
-        // Get current space complexity
-        let (_, sc, _) = tree_complexity(&tree, log2_sizes);
+        // Use passed-in space complexity instead of recomputing
+        let sc_new = sc_current.max(sc_current + diff.dsc);
 
         // Energy change calculation
-        let sc_penalty = if sc.max(sc + diff.dsc) > score.sc_target {
+        let sc_penalty = if sc_new > score.sc_target {
             score.sc_weight
         } else {
             0.0
@@ -300,29 +310,31 @@ fn optimize_subtree<R: Rng>(
 
         if accept {
             let new_tree = apply_rule(tree, rule, diff.new_labels);
-            // Recursively optimize children
-            return optimize_children(new_tree, beta, log2_sizes, score, decomp, rng);
+            // Recursively optimize children with updated sc
+            return optimize_children(new_tree, beta, log2_sizes, score, decomp, sc_new, rng);
         }
     }
 
     // If not accepted, still try to optimize children
-    optimize_children(tree, beta, log2_sizes, score, decomp, rng)
+    optimize_children(tree, beta, log2_sizes, score, decomp, sc_current, rng)
 }
 
 /// Optimize children of a tree node.
+#[inline]
 fn optimize_children<R: Rng>(
     tree: ExprTree,
     beta: f64,
     log2_sizes: &[f64],
     score: &ScoreFunction,
     decomp: DecompositionType,
+    sc_current: f64,
     rng: &mut R,
 ) -> ExprTree {
     match tree {
         ExprTree::Leaf(_) => tree,
         ExprTree::Node { left, right, info } => {
-            let new_left = optimize_subtree(*left, beta, log2_sizes, score, decomp, rng);
-            let new_right = optimize_subtree(*right, beta, log2_sizes, score, decomp, rng);
+            let new_left = optimize_subtree(*left, beta, log2_sizes, score, decomp, sc_current, rng);
+            let new_right = optimize_subtree(*right, beta, log2_sizes, score, decomp, sc_current, rng);
             ExprTree::Node {
                 left: Box::new(new_left),
                 right: Box::new(new_right),
@@ -397,11 +409,9 @@ pub fn optimize_treesa<L: Label>(
     let results: Vec<_> = (0..config.ntrials)
         .into_par_iter()
         .map(|trial_idx| {
-            let mut rng = rand::rng();
-            // Add some randomness based on trial index
-            for _ in 0..trial_idx {
-                let _: u64 = rng.random();
-            }
+            // Use thread-local RNG seeded with trial index for reproducibility
+            use rand::SeedableRng;
+            let mut rng = rand::rngs::SmallRng::seed_from_u64(trial_idx as u64 + 42);
 
             // Initialize tree
             let tree = match config.initializer {

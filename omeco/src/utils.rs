@@ -13,13 +13,24 @@
 /// let result = fast_log2sumexp2(10.0, 10.0);
 /// assert!((result - 11.0).abs() < 1e-10); // log2(2^10 + 2^10) = log2(2*2^10) = 11
 /// ```
-#[inline]
+#[inline(always)]
 pub fn fast_log2sumexp2(a: f64, b: f64) -> f64 {
     let (min, max) = if a < b { (a, b) } else { (b, a) };
     if min == f64::NEG_INFINITY {
         return max;
     }
-    (2_f64.powf(min - max) + 1.0).log2() + max
+    // Use log1p_exp for numerical stability: log2(1 + 2^x) = (ln(1 + e^(x*ln2))) / ln2
+    // For small |x|, this is more accurate
+    let diff = min - max;
+    if diff < -50.0 {
+        // 2^diff is negligible
+        max
+    } else {
+        // log2(1 + 2^diff) = log2(e) * ln(1 + e^(diff * ln(2)))
+        let ln2 = std::f64::consts::LN_2;
+        let log2e = std::f64::consts::LOG2_E;
+        max + log2e * (diff * ln2).exp().ln_1p()
+    }
 }
 
 /// Numerically stable computation of log2(2^a + 2^b + 2^c).
@@ -31,14 +42,46 @@ pub fn fast_log2sumexp2(a: f64, b: f64) -> f64 {
 /// let result = fast_log2sumexp2_3(10.0, 10.0, 10.0);
 /// // log2(3 * 2^10) ≈ 10 + log2(3) ≈ 11.585
 /// ```
-#[inline]
+#[inline(always)]
 pub fn fast_log2sumexp2_3(a: f64, b: f64, c: f64) -> f64 {
     let max = a.max(b).max(c);
     if max == f64::NEG_INFINITY {
         return f64::NEG_INFINITY;
     }
-    let sum = 2_f64.powf(a - max) + 2_f64.powf(b - max) + 2_f64.powf(c - max);
-    sum.log2() + max
+    // Compute scaled sum avoiding overflow
+    let da = a - max;
+    let db = b - max;
+    let dc = c - max;
+    
+    // Skip negligible terms (2^-50 ≈ 1e-15)
+    let mut sum = 0.0_f64;
+    if da > -50.0 {
+        sum += fast_exp2(da);
+    }
+    if db > -50.0 {
+        sum += fast_exp2(db);
+    }
+    if dc > -50.0 {
+        sum += fast_exp2(dc);
+    }
+    
+    if sum == 0.0 {
+        max
+    } else {
+        sum.log2() + max
+    }
+}
+
+/// Fast 2^x approximation for small x (used in log2sumexp)
+#[inline(always)]
+fn fast_exp2(x: f64) -> f64 {
+    // For x close to 0, use exp2 directly; it's well-optimized
+    // For very negative x, return 0
+    if x < -50.0 {
+        0.0
+    } else {
+        2_f64.powf(x)
+    }
 }
 
 /// Numerically stable computation of log2(sum(2^x for x in values)).

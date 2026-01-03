@@ -15,9 +15,9 @@ from omeco import (
 
 def test_optimize_greedy_basic():
     """Test basic greedy optimization."""
-    ixs = [['i', 'j'], ['j', 'k']]
-    out = ['i', 'k']
-    sizes = {'i': 10, 'j': 20, 'k': 10}
+    ixs = [[0, 1], [1, 2]]
+    out = [0, 2]
+    sizes = {0: 10, 1: 20, 2: 10}
     
     tree = optimize_greedy(ixs, out, sizes)
     assert tree is not None
@@ -27,9 +27,9 @@ def test_optimize_greedy_basic():
 
 def test_optimize_greedy_chain():
     """Test greedy optimization on a chain."""
-    ixs = [['i', 'j'], ['j', 'k'], ['k', 'l']]
-    out = ['i', 'l']
-    sizes = {'i': 10, 'j': 20, 'k': 20, 'l': 10}
+    ixs = [[0, 1], [1, 2], [2, 3]]
+    out = [0, 3]
+    sizes = {0: 10, 1: 20, 2: 20, 3: 10}
     
     tree = optimize_greedy(ixs, out, sizes)
     assert tree.leaf_count() == 3
@@ -38,9 +38,9 @@ def test_optimize_greedy_chain():
 
 def test_optimize_treesa():
     """Test TreeSA optimization."""
-    ixs = [['i', 'j'], ['j', 'k']]
-    out = ['i', 'k']
-    sizes = {'i': 10, 'j': 20, 'k': 10}
+    ixs = [[0, 1], [1, 2]]
+    out = [0, 2]
+    sizes = {0: 10, 1: 20, 2: 10}
     
     tree = optimize_treesa(ixs, out, sizes, TreeSA.fast())
     assert tree is not None
@@ -49,9 +49,9 @@ def test_optimize_treesa():
 
 def test_contraction_complexity():
     """Test complexity computation."""
-    ixs = [['i', 'j'], ['j', 'k']]
-    out = ['i', 'k']
-    sizes = {'i': 10, 'j': 20, 'k': 10}
+    ixs = [[0, 1], [1, 2]]
+    out = [0, 2]
+    sizes = {0: 10, 1: 20, 2: 10}
     
     tree = optimize_greedy(ixs, out, sizes)
     complexity = contraction_complexity(tree, ixs, sizes)
@@ -64,15 +64,15 @@ def test_contraction_complexity():
 
 def test_sliced_einsum():
     """Test sliced einsum."""
-    ixs = [['i', 'j'], ['j', 'k']]
-    out = ['i', 'k']
-    sizes = {'i': 10, 'j': 20, 'k': 10}
+    ixs = [[0, 1], [1, 2]]
+    out = [0, 2]
+    sizes = {0: 10, 1: 20, 2: 10}
     
     tree = optimize_greedy(ixs, out, sizes)
-    sliced = SlicedEinsum(['j'], tree)
+    sliced = SlicedEinsum([1], tree)
     
     assert sliced.num_slices() == 1
-    assert 'j' in sliced.slicing()
+    assert 1 in sliced.slicing()
     
     complexity = sliced_complexity(sliced, ixs, sizes)
     assert complexity.sc > 0
@@ -80,22 +80,22 @@ def test_sliced_einsum():
 
 def test_uniform_size_dict():
     """Test uniform size dictionary creation."""
-    ixs = [['i', 'j'], ['j', 'k']]
-    out = ['i', 'k']
+    ixs = [[0, 1], [1, 2]]
+    out = [0, 2]
     
     sizes = uniform_size_dict(ixs, out, 16)
-    assert sizes['i'] == 16
-    assert sizes['j'] == 16
-    assert sizes['k'] == 16
+    assert sizes[0] == 16
+    assert sizes[1] == 16
+    assert sizes[2] == 16
 
 
 def test_greedy_method_params():
     """Test GreedyMethod with parameters."""
     opt = GreedyMethod(alpha=0.5, temperature=1.0)
     
-    ixs = [['i', 'j'], ['j', 'k']]
-    out = ['i', 'k']
-    sizes = {'i': 10, 'j': 20, 'k': 10}
+    ixs = [[0, 1], [1, 2]]
+    out = [0, 2]
+    sizes = {0: 10, 1: 20, 2: 10}
     
     tree = optimize_greedy(ixs, out, sizes, opt)
     assert tree is not None
@@ -105,10 +105,9 @@ def test_treesa_config():
     """Test TreeSA configuration methods."""
     opt = TreeSA().with_sc_target(10.0).with_ntrials(2)
     
-    ixs = [['i', 'j'], ['j', 'k']]
-    out = ['i', 'k']
-    sizes = {'i': 4, 'j': 8, 'k': 4}
+    ixs = [[0, 1], [1, 2]]
+    out = [0, 2]
+    sizes = {0: 4, 1: 8, 2: 4}
     
     tree = optimize_treesa(ixs, out, sizes, opt)
     assert tree is not None
-

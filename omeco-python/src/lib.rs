@@ -13,7 +13,7 @@ use omeco::{
 #[pyclass(name = "NestedEinsum")]
 #[derive(Clone)]
 pub struct PyNestedEinsum {
-    inner: NestedEinsum<char>,
+    inner: NestedEinsum<i64>,
 }
 
 #[pymethods]
@@ -52,21 +52,21 @@ impl PyNestedEinsum {
 #[pyclass(name = "SlicedEinsum")]
 #[derive(Clone)]
 pub struct PySlicedEinsum {
-    inner: SlicedEinsum<char>,
+    inner: SlicedEinsum<i64>,
 }
 
 #[pymethods]
 impl PySlicedEinsum {
     /// Create a new sliced einsum.
     #[new]
-    fn new(slicing: Vec<char>, tree: PyNestedEinsum) -> Self {
+    fn new(slicing: Vec<i64>, tree: PyNestedEinsum) -> Self {
         Self {
             inner: SlicedEinsum::new(slicing, tree.inner),
         }
     }
 
     /// Get the sliced indices.
-    fn slicing(&self) -> Vec<char> {
+    fn slicing(&self) -> Vec<i64> {
         self.inner.slicing.clone()
     }
 
@@ -219,8 +219,8 @@ impl PyTreeSA {
 /// Optimize the contraction order using greedy method.
 ///
 /// Args:
-///     ixs: List of index lists for each tensor (e.g., [['i', 'j'], ['j', 'k']]).
-///     out: Output indices (e.g., ['i', 'k']).
+///     ixs: List of index lists for each tensor (e.g., [[0, 1], [1, 2]]).
+///     out: Output indices (e.g., [0, 2]).
 ///     sizes: Dictionary mapping indices to their dimensions.
 ///     optimizer: Optimizer to use (GreedyMethod or TreeSA).
 ///
@@ -229,9 +229,9 @@ impl PyTreeSA {
 #[pyfunction]
 #[pyo3(signature = (ixs, out, sizes, optimizer=None))]
 fn optimize_greedy(
-    ixs: Vec<Vec<char>>,
-    out: Vec<char>,
-    sizes: HashMap<char, usize>,
+    ixs: Vec<Vec<i64>>,
+    out: Vec<i64>,
+    sizes: HashMap<i64, usize>,
     optimizer: Option<PyGreedyMethod>,
 ) -> PyResult<PyNestedEinsum> {
     let code = EinCode::new(ixs, out);
@@ -256,9 +256,9 @@ fn optimize_greedy(
 #[pyfunction]
 #[pyo3(signature = (ixs, out, sizes, optimizer=None))]
 fn optimize_treesa(
-    ixs: Vec<Vec<char>>,
-    out: Vec<char>,
-    sizes: HashMap<char, usize>,
+    ixs: Vec<Vec<i64>>,
+    out: Vec<i64>,
+    sizes: HashMap<i64, usize>,
     optimizer: Option<PyTreeSA>,
 ) -> PyResult<PyNestedEinsum> {
     let code = EinCode::new(ixs, out);
@@ -282,8 +282,8 @@ fn optimize_treesa(
 #[pyfunction]
 fn contraction_complexity(
     tree: &PyNestedEinsum,
-    ixs: Vec<Vec<char>>,
-    sizes: HashMap<char, usize>,
+    ixs: Vec<Vec<i64>>,
+    sizes: HashMap<i64, usize>,
 ) -> PyContractionComplexity {
     omeco::contraction_complexity(&tree.inner, &sizes, &ixs).into()
 }
@@ -300,8 +300,8 @@ fn contraction_complexity(
 #[pyfunction]
 fn sliced_complexity(
     sliced: &PySlicedEinsum,
-    ixs: Vec<Vec<char>>,
-    sizes: HashMap<char, usize>,
+    ixs: Vec<Vec<i64>>,
+    sizes: HashMap<i64, usize>,
 ) -> PyContractionComplexity {
     omeco::sliced_complexity(&sliced.inner, &sizes, &ixs).into()
 }
@@ -316,7 +316,7 @@ fn sliced_complexity(
 /// Returns:
 ///     Dictionary mapping each index to the given size.
 #[pyfunction]
-fn uniform_size_dict(ixs: Vec<Vec<char>>, out: Vec<char>, size: usize) -> HashMap<char, usize> {
+fn uniform_size_dict(ixs: Vec<Vec<i64>>, out: Vec<i64>, size: usize) -> HashMap<i64, usize> {
     let code = EinCode::new(ixs, out);
     omeco::uniform_size_dict(&code, size)
 }
@@ -336,4 +336,3 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(uniform_size_dict, m)?)?;
     Ok(())
 }
-
