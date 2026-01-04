@@ -48,16 +48,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install maturin
-        run: pip install maturin pytest
+      - name: Create virtualenv and install dependencies
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install maturin pytest
 
       - name: Build and install
         run: |
+          source .venv/bin/activate
           cd omeco-python
           maturin develop
 
       - name: Run tests
         run: |
+          source .venv/bin/activate
           cd omeco-python
           pytest -v
 
