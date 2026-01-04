@@ -52,7 +52,7 @@ pub fn fast_log2sumexp2_3(a: f64, b: f64, c: f64) -> f64 {
     let da = a - max;
     let db = b - max;
     let dc = c - max;
-    
+
     // Skip negligible terms (2^-50 ≈ 1e-15)
     let mut sum = 0.0_f64;
     if da > -50.0 {
@@ -64,7 +64,7 @@ pub fn fast_log2sumexp2_3(a: f64, b: f64, c: f64) -> f64 {
     if dc > -50.0 {
         sum += fast_exp2(dc);
     }
-    
+
     if sum == 0.0 {
         max
     } else {

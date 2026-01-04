@@ -1,12 +1,11 @@
 //! Python bindings for omeco tensor network contraction order optimization.
 
-use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
 use std::collections::HashMap;
 
 use omeco::{
-    CodeOptimizer, ContractionComplexity, EinCode, GreedyMethod, NestedEinsum, SlicedEinsum,
-    TreeSA,
+    CodeOptimizer, ContractionComplexity, EinCode, GreedyMethod, NestedEinsum, SlicedEinsum, TreeSA,
 };
 
 /// A contraction order represented as a nested einsum tree.
@@ -44,7 +43,11 @@ impl PyNestedEinsum {
     }
 
     fn __repr__(&self) -> String {
-        format!("NestedEinsum(leaves={}, depth={})", self.leaf_count(), self.depth())
+        format!(
+            "NestedEinsum(leaves={}, depth={})",
+            self.leaf_count(),
+            self.depth()
+        )
     }
 }
 
@@ -236,7 +239,7 @@ fn optimize_greedy(
 ) -> PyResult<PyNestedEinsum> {
     let code = EinCode::new(ixs, out);
     let opt = optimizer.unwrap_or_else(|| PyGreedyMethod::new(0.0, 0.0));
-    
+
     opt.inner
         .optimize(&code, &sizes)
         .map(|inner| PyNestedEinsum { inner })
@@ -263,7 +266,7 @@ fn optimize_treesa(
 ) -> PyResult<PyNestedEinsum> {
     let code = EinCode::new(ixs, out);
     let opt = optimizer.unwrap_or_else(PyTreeSA::new);
-    
+
     opt.inner
         .optimize(&code, &sizes)
         .map(|inner| PyNestedEinsum { inner })
