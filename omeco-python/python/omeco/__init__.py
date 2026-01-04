@@ -15,6 +15,14 @@ Example:
     >>> tree = optimize_greedy(ixs, out, sizes)
     >>> complexity = contraction_complexity(tree, ixs, sizes)
     >>> print(f"Time: 2^{complexity.tc:.2f}, Space: 2^{complexity.sc:.2f}")
+
+Using with PyTorch:
+    >>> tree_dict = tree.to_dict()  # Convert to dict for traversal
+    >>> # tree_dict structure:
+    >>> # - Leaf: {"tensor_index": int}
+    >>> # - Node: {"args": [...], "eins": {"ixs": [[int]], "iy": [int]}}
+    >>>
+    >>> # See examples/pytorch_tensor_network_example.py for complete usage
 """
 
 from omeco._core import (

@@ -42,6 +42,15 @@ impl PyNestedEinsum {
         self.inner.leaf_indices()
     }
 
+    /// Convert to a Python dictionary for traversal.
+    ///
+    /// Returns a dict with structure:
+    /// - For leaf: {"tensor_index": int}
+    /// - For node: {"args": [child_dicts], "eins": {"ixs": [[int]], "iy": [int]}}
+    fn to_dict(&self, py: Python<'_>) -> PyResult<PyObject> {
+        nested_to_dict(py, &self.inner)
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "NestedEinsum(leaves={}, depth={})",
@@ -49,6 +58,30 @@ impl PyNestedEinsum {
             self.depth()
         )
     }
+}
+
+fn nested_to_dict(py: Python<'_>, nested: &NestedEinsum<i64>) -> PyResult<PyObject> {
+    use pyo3::types::PyDict;
+
+    let dict = PyDict::new(py);
+    match nested {
+        NestedEinsum::Leaf { tensor_index } => {
+            dict.set_item("tensor_index", *tensor_index)?;
+        }
+        NestedEinsum::Node { args, eins } => {
+            let args_list: Vec<PyObject> = args
+                .iter()
+                .map(|arg| nested_to_dict(py, arg))
+                .collect::<PyResult<_>>()?;
+            dict.set_item("args", args_list)?;
+
+            let eins_dict = PyDict::new(py);
+            eins_dict.set_item("ixs", &eins.ixs)?;
+            eins_dict.set_item("iy", &eins.iy)?;
+            dict.set_item("eins", eins_dict)?;
+        }
+    }
+    Ok(dict.into())
 }
 
 /// A sliced einsum with indices to loop over.

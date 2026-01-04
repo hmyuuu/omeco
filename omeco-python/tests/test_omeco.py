@@ -111,3 +111,80 @@ def test_treesa_config():
     
     tree = optimize_treesa(ixs, out, sizes, opt)
     assert tree is not None
+
+
+def test_to_dict_leaf():
+    """Test to_dict for a single tensor (leaf node)."""
+    ixs = [[0, 1]]
+    out = [0, 1]
+    sizes = {0: 10, 1: 20}
+    
+    tree = optimize_greedy(ixs, out, sizes)
+    d = tree.to_dict()
+    
+    # Single tensor should be a leaf
+    assert "tensor_index" in d
+    assert d["tensor_index"] == 0
+
+
+def test_to_dict_binary():
+    """Test to_dict for a binary contraction."""
+    ixs = [[0, 1], [1, 2]]
+    out = [0, 2]
+    sizes = {0: 10, 1: 20, 2: 10}
+    
+    tree = optimize_greedy(ixs, out, sizes)
+    d = tree.to_dict()
+    
+    # Should be a node with args and eins
+    assert "args" in d
+    assert "eins" in d
+    assert len(d["args"]) == 2
+    
+    # Check eins structure
+    assert "ixs" in d["eins"]
+    assert "iy" in d["eins"]
+    assert len(d["eins"]["ixs"]) == 2
+    
+    # Children should be leaves
+    for arg in d["args"]:
+        assert "tensor_index" in arg
+
+
+def test_to_dict_chain():
+    """Test to_dict for a chain of contractions."""
+    ixs = [[0, 1], [1, 2], [2, 3]]
+    out = [0, 3]
+    sizes = {0: 10, 1: 20, 2: 20, 3: 10}
+    
+    tree = optimize_greedy(ixs, out, sizes)
+    d = tree.to_dict()
+    
+    # Should be a node
+    assert "args" in d
+    assert "eins" in d
+    
+    # Count leaves by recursion
+    def count_leaves(node):
+        if "tensor_index" in node:
+            return 1
+        return sum(count_leaves(arg) for arg in node["args"])
+    
+    assert count_leaves(d) == 3
+
+
+def test_to_dict_indices():
+    """Test that to_dict preserves correct indices."""
+    ixs = [[0, 1], [1, 2]]
+    out = [0, 2]
+    sizes = {0: 10, 1: 20, 2: 10}
+    
+    tree = optimize_greedy(ixs, out, sizes)
+    d = tree.to_dict()
+    
+    # Output should match
+    assert d["eins"]["iy"] == out
+    
+    # Input indices should be the original tensor indices
+    input_ixs = d["eins"]["ixs"]
+    assert input_ixs == ixs

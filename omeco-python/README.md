@@ -19,6 +19,14 @@ This library provides two optimization algorithms:
 
 ## Installation
 
+### Python
+
+```bash
+pip install omeco
+```
+
+### Rust
+
 Add to your `Cargo.toml`:
 
 ```toml
@@ -26,7 +34,72 @@ Add to your `Cargo.toml`:
 omeco = "0.1"
 ```
 
-## Quick Start
+## Python Quick Start
+
+```python
+from omeco import optimize_greedy, contraction_complexity
+
+# Matrix chain: A[0,1] × B[1,2] × C[2,3] → D[0,3]
+ixs = [[0, 1], [1, 2], [2, 3]]
+out = [0, 3]
+sizes = {0: 100, 1: 200, 2: 50, 3: 100}
+
+# Optimize contraction order
+tree = optimize_greedy(ixs, out, sizes)
+
+# Check complexity
+complexity = contraction_complexity(tree, ixs, sizes)
+print(f"Time: 2^{complexity.tc:.2f}, Space: 2^{complexity.sc:.2f}")
+```
+
+## Using with PyTorch
+
+The optimized contraction tree can be used with PyTorch to perform tensor contractions efficiently:
+
+```python
+import torch
+from omeco import optimize_greedy, contraction_complexity
+
+# Step 1: Define einsum notation and input tensors
+ixs = [[0, 1], [1, 2], [2, 3], [3, 4]]  # A(i,j) × B(j,k) × C(k,l) × D(l,m)
+out = [0, 4]  # Output: (i,m)
+dims = {0: 100, 1: 50, 2: 80, 3: 60, 4: 100}
+
+tensors = [
+    torch.randn(dims[0], dims[1]),
+    torch.randn(dims[1], dims[2]),
+    torch.randn(dims[2], dims[3]),
+    torch.randn(dims[3], dims[4]),
+]
+
+# Step 2: Optimize contraction order
+tree = optimize_greedy(ixs, out, dims)
+print(f"Optimized tree: {tree}")
+
+# Step 3: Contract using the optimized order
+def einsum_int(ixs, iy, tensors):
+    """Einsum with integer index labels."""
+    labels = {l: chr(ord('a') + i) for i, l in enumerate(sorted(set(sum(ixs, []) + iy)))}
+    eq = ",".join("".join(labels[l] for l in ix) for ix in ixs) + "->" + "".join(labels[l] for l in iy)
+    return torch.einsum(eq, *tensors)
+
+def contract(tree_dict, tensors):
+    """Contract tensors according to the optimized tree."""
+    if "tensor_index" in tree_dict:
+        return tensors[tree_dict["tensor_index"]]
+    args = [contract(arg, tensors) for arg in tree_dict["args"]]
+    return einsum_int(tree_dict["eins"]["ixs"], tree_dict["eins"]["iy"], args)
+
+result = contract(tree.to_dict(), tensors)
+
+# Step 4: Verify against native einsum
+expected = torch.einsum("ij,jk,kl,lm->im", *tensors)
+print(f"Max difference: {torch.max(torch.abs(result - expected)):.2e}")
+```
+
+See [`examples/pytorch_tensor_network_example.py`](../examples/pytorch_tensor_network_example.py) for a complete example.
+
+## Rust Quick Start
 
 Two core features are exposed in the quick start below: optimizing contraction
 orders and slicing for lower peak memory.

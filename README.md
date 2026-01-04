@@ -19,6 +19,14 @@ This library provides two optimization algorithms:
 
 ## Installation
 
+### Python
+
+```bash
+pip install omeco
+```
+
+### Rust
+
 Add to your `Cargo.toml`:
 
 ```toml
@@ -26,7 +34,28 @@ Add to your `Cargo.toml`:
 omeco = "0.1"
 ```
 
-## Quick Start
+## Python Quick Start
+
+```python
+from omeco import optimize_greedy, contraction_complexity
+
+# Matrix chain: A[0,1] × B[1,2] × C[2,3] → D[0,3]
+ixs = [[0, 1], [1, 2], [2, 3]]
+out = [0, 3]
+sizes = {0: 100, 1: 200, 2: 50, 3: 100}
+
+# Optimize contraction order
+tree = optimize_greedy(ixs, out, sizes)
+
+# Check complexity
+complexity = contraction_complexity(tree, ixs, sizes)
+print(f"Time: 2^{complexity.tc:.2f}, Space: 2^{complexity.sc:.2f}")
+
+# Use with PyTorch (see examples/pytorch_tensor_network_example.py)
+tree_dict = tree.to_dict()  # Convert to dict for traversal
+```
+
+## Rust Quick Start
 
 Two core features are exposed in the quick start below: optimizing contraction
 orders and slicing for lower peak memory.
