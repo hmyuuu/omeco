@@ -234,7 +234,7 @@ def test_optimize_code_treesa_configured():
     out = [0, 3]
     sizes = {0: 10, 1: 20, 2: 20, 3: 10}
 
-    opt = TreeSA().with_ntrials(2).with_niters(10)
+    opt = TreeSA(ntrials=2, niters=10)
     tree = optimize_code(ixs, out, sizes, opt)
     assert tree.leaf_count() == 3
 
@@ -506,3 +506,127 @@ def test_fixed_slices_with_score():
 
     assert sliced is not None
     assert 1 in sliced.slicing()
+
+
+# ============== Tests for 3-regular graphs ==============
+
+
+def random_regular_graph_eincode(n: int, k: int, seed: int = 42):
+    """Generate a tensor network from a random k-regular graph.
+    
+    Each edge becomes a matrix tensor (2 indices), and each vertex 
+    has a vector tensor (1 index). This represents an independent set
+    polynomial computation.
+    
+    Args:
+        n: Number of vertices.
+        k: Degree of each vertex.
+        seed: Random seed for reproducibility.
+        
+    Returns:
+        Tuple of (ixs, out) for the tensor network.
+    """
+    import networkx as nx
+    
+    g = nx.random_regular_graph(k, n, seed=seed)
+    
+    # Edge tensors: each edge (i, j) has indices [min(i,j), max(i,j)]
+    edge_ixs = [[min(e[0], e[1]), max(e[0], e[1])] for e in g.edges()]
+    
+    # Vertex tensors: each vertex i has index [i]
+    vertex_ixs = [[i] for i in g.nodes()]
+    
+    # All tensors combined
+    ixs = edge_ixs + vertex_ixs
+    
+    # Output is scalar (empty)
+    out = []
+    
+    return ixs, out
+
+
+def test_3regular_graph_greedy():
+    """Test GreedyMethod on a 3-regular graph gives reasonable space complexity.
+    
+    Based on the Julia test in OMEinsumContractionOrders/test/treesa.jl.
+    For a 50-vertex 3-regular graph with bond dimension 2, space complexity 
+    should be achievable around sc <= 12.
+    """
+    n = 50
+    ixs, out = random_regular_graph_eincode(n, 3, seed=42)
+    sizes = uniform_size_dict(ixs, out, 2)  # bond dimension 2
+    
+    # Optimize with greedy
+    tree = optimize_code(ixs, out, sizes, GreedyMethod())
+    
+    assert tree is not None
+    assert tree.is_binary()
+    
+    # Compute complexity
+    cc = contraction_complexity(tree, ixs, sizes)
+    
+    # For a 50-node 3-regular graph with d=2, greedy should achieve sc around 10-15
+    assert cc.sc <= 15, f"Greedy sc={cc.sc} too high for 50-node 3-regular graph"
+    assert cc.tc > 0, "Time complexity should be positive"
+    
+    print(f"3-regular graph (n={n}): Greedy sc={cc.sc:.2f}, tc={cc.tc:.2f}")
+
+
+def test_3regular_graph_treesa():
+    """Test TreeSA on a 3-regular graph achieves target space complexity.
+    
+    Based on the Julia test in OMEinsumContractionOrders/test/treesa.jl.
+    TreeSA should be able to find better contraction orders than greedy
+    for 3-regular graphs.
+    """
+    n = 50
+    ixs, out = random_regular_graph_eincode(n, 3, seed=42)
+    sizes = uniform_size_dict(ixs, out, 2)  # bond dimension 2
+    
+    # First get greedy baseline
+    greedy_tree = optimize_code(ixs, out, sizes, GreedyMethod())
+    greedy_cc = contraction_complexity(greedy_tree, ixs, sizes)
+    
+    # Optimize with TreeSA - use enough trials for reliable results
+    # Target a reasonable space complexity for 50-node 3-regular graph
+    score = ScoreFunction(sc_target=10.0)
+    opt = TreeSA(ntrials=5, niters=50, score=score)
+    
+    treesa_tree = optimize_code(ixs, out, sizes, opt)
+    
+    assert treesa_tree is not None
+    assert treesa_tree.is_binary()
+    
+    treesa_cc = contraction_complexity(treesa_tree, ixs, sizes)
+    
+    # For 50-node 3-regular graph with d=2, sc should be around 10-12
+    # Both greedy and TreeSA should achieve reasonable complexity
+    assert treesa_cc.sc <= 14, f"TreeSA sc={treesa_cc.sc} too high for 50-node 3-regular graph"
+    assert greedy_cc.sc <= 14, f"Greedy sc={greedy_cc.sc} too high for 50-node 3-regular graph"
+    
+    print(f"3-regular graph (n={n}): Greedy sc={greedy_cc.sc:.2f}, TreeSA sc={treesa_cc.sc:.2f}")
+
+
+def test_3regular_graph_larger():
+    """Test optimizers on a larger 3-regular graph (100 vertices).
+    
+    Tests scalability and that reasonable complexities are still achieved.
+    """
+    n = 100
+    ixs, out = random_regular_graph_eincode(n, 3, seed=123)
+    sizes = uniform_size_dict(ixs, out, 2)
+    
+    # Greedy optimization
+    greedy_tree = optimize_code(ixs, out, sizes, GreedyMethod())
+    greedy_cc = contraction_complexity(greedy_tree, ixs, sizes)
+    
+    # TreeSA optimization with fast settings
+    opt = TreeSA.fast(score=ScoreFunction(sc_target=20.0))
+    treesa_tree = optimize_code(ixs, out, sizes, opt)
+    treesa_cc = contraction_complexity(treesa_tree, ixs, sizes)
+    
+    # For 100-node 3-regular graph, sc should be achievable around 15-25
+    assert greedy_cc.sc <= 30, f"Greedy sc={greedy_cc.sc} too high for 100-node graph"
+    assert treesa_cc.sc <= 30, f"TreeSA sc={treesa_cc.sc} too high for 100-node graph"
+    
+    print(f"3-regular graph (n={n}): Greedy sc={greedy_cc.sc:.2f}, TreeSA sc={treesa_cc.sc:.2f}")

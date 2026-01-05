@@ -143,7 +143,7 @@ def run_benchmark(name: str, ixs, iy, sizes, ntrials=1, niters=50):
     
     # TreeSA
     print(f"TreeSA (ntrials={ntrials}, niters={niters}):")
-    treesa_cfg = TreeSA().with_ntrials(ntrials).with_niters(niters)
+    treesa_cfg = TreeSA(ntrials=ntrials, niters=niters)
     
     # Warmup
     _ = optimize_treesa(ixs, iy, sizes, treesa_cfg)
