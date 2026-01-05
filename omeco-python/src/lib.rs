@@ -5,7 +5,8 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 
 use omeco::{
-    CodeOptimizer, ContractionComplexity, EinCode, GreedyMethod, NestedEinsum, SlicedEinsum, TreeSA,
+    CodeOptimizer, ContractionComplexity, EinCode, GreedyMethod, NestedEinsum, ScoreFunction,
+    SlicedEinsum, TreeSA, TreeSASlicer,
 };
 
 /// A contraction order represented as a nested einsum tree.
@@ -252,6 +253,81 @@ impl PyTreeSA {
     }
 }
 
+/// Slicing optimizer for reducing space complexity.
+///
+/// This optimizer iteratively adds slices to reduce memory requirements,
+/// trading time complexity for space complexity.
+#[pyclass(name = "TreeSASlicer")]
+#[derive(Clone)]
+pub struct PyTreeSASlicer {
+    inner: TreeSASlicer,
+}
+
+#[pymethods]
+impl PyTreeSASlicer {
+    /// Create a new TreeSASlicer optimizer.
+    ///
+    /// Args:
+    ///     sc_target: Target space complexity (log2 scale). Default: 30.0.
+    ///     ntrials: Number of parallel trials. Default: 10.
+    ///     niters: Iterations per temperature level. Default: 10.
+    ///     optimization_ratio: Ratio for iteration count. Default: 2.0.
+    #[new]
+    #[pyo3(signature = (sc_target=30.0, ntrials=10, niters=10, optimization_ratio=2.0))]
+    fn new(sc_target: f64, ntrials: usize, niters: usize, optimization_ratio: f64) -> Self {
+        let score = ScoreFunction::default().with_sc_target(sc_target);
+        let mut slicer = TreeSASlicer::default();
+        slicer.score = score;
+        slicer.ntrials = ntrials;
+        slicer.niters = niters;
+        slicer.optimization_ratio = optimization_ratio;
+        Self { inner: slicer }
+    }
+
+    /// Create a fast TreeSASlicer configuration (fewer iterations).
+    #[staticmethod]
+    fn fast() -> Self {
+        Self {
+            inner: TreeSASlicer::fast(),
+        }
+    }
+
+    /// Set the space complexity target.
+    fn with_sc_target(&self, sc_target: f64) -> Self {
+        Self {
+            inner: self.inner.clone().with_sc_target(sc_target),
+        }
+    }
+
+    /// Set the number of parallel trials.
+    fn with_ntrials(&self, ntrials: usize) -> Self {
+        Self {
+            inner: self.inner.clone().with_ntrials(ntrials),
+        }
+    }
+
+    /// Set the number of iterations per temperature level.
+    fn with_niters(&self, niters: usize) -> Self {
+        Self {
+            inner: self.inner.clone().with_niters(niters),
+        }
+    }
+
+    /// Set the optimization ratio.
+    fn with_optimization_ratio(&self, ratio: f64) -> Self {
+        Self {
+            inner: self.inner.clone().with_optimization_ratio(ratio),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "TreeSASlicer(sc_target={:.1}, ntrials={}, niters={})",
+            self.inner.score.sc_target, self.inner.ntrials, self.inner.niters
+        )
+    }
+}
+
 /// Optimize the contraction order using greedy method.
 ///
 /// Args:
@@ -357,6 +433,91 @@ fn uniform_size_dict(ixs: Vec<Vec<i64>>, out: Vec<i64>, size: usize) -> HashMap<
     omeco::uniform_size_dict(&code, size)
 }
 
+/// Slice a contraction tree to reduce space complexity.
+///
+/// This function takes an already-optimized contraction tree and finds indices
+/// to slice over, reducing memory requirements at the cost of additional computation.
+///
+/// Args:
+///     tree: Optimized contraction tree (from optimize_code or optimize_treesa).
+///     ixs: Original index lists for each tensor.
+///     sizes: Dictionary mapping indices to their dimensions.
+///     slicer: Slicing optimizer configuration. Defaults to TreeSASlicer().
+///
+/// Returns:
+///     SlicedEinsum with the sliced indices and optimized tree.
+///
+/// Example:
+///     >>> from omeco import optimize_code, slice_code, TreeSASlicer, GreedyMethod
+///     >>> ixs = [[0, 1], [1, 2], [2, 3]]
+///     >>> out = [0, 3]
+///     >>> sizes = {0: 100, 1: 50, 2: 80, 3: 100}
+///     >>> tree = optimize_code(ixs, out, sizes, GreedyMethod())
+///     >>> sliced = slice_code(tree, ixs, sizes, TreeSASlicer(sc_target=10.0))
+///     >>> print(sliced.slicing())  # Indices that will be looped over
+#[pyfunction]
+#[pyo3(signature = (tree, ixs, sizes, slicer=None))]
+fn slice_code(
+    tree: &PyNestedEinsum,
+    ixs: Vec<Vec<i64>>,
+    sizes: HashMap<i64, usize>,
+    slicer: Option<PyTreeSASlicer>,
+) -> PyResult<PySlicedEinsum> {
+    let config = slicer.unwrap_or_else(|| PyTreeSASlicer::new(30.0, 10, 10, 2.0));
+
+    omeco::slice_code(&tree.inner, &sizes, &config.inner, &ixs)
+        .map(|inner| PySlicedEinsum { inner })
+        .ok_or_else(|| PyValueError::new_err("Slicing failed"))
+}
+
+/// Unified optimizer type that can be either GreedyMethod or TreeSA.
+#[derive(FromPyObject)]
+enum PyOptimizer {
+    Greedy(PyGreedyMethod),
+    TreeSA(PyTreeSA),
+}
+
+/// Optimize the contraction order using the specified optimizer.
+///
+/// This is the unified interface for contraction order optimization.
+///
+/// Args:
+///     ixs: List of index lists for each tensor (e.g., [[0, 1], [1, 2]]).
+///     out: Output indices (e.g., [0, 2]).
+///     sizes: Dictionary mapping indices to their dimensions.
+///     optimizer: Optimizer to use (GreedyMethod or TreeSA). Defaults to GreedyMethod().
+///
+/// Returns:
+///     Optimized contraction tree as NestedEinsum.
+///
+/// Example:
+///     >>> from omeco import optimize_code, GreedyMethod, TreeSA
+///     >>> ixs = [[0, 1], [1, 2], [2, 3]]
+///     >>> out = [0, 3]
+///     >>> sizes = {0: 100, 1: 50, 2: 80, 3: 100}
+///     >>> tree = optimize_code(ixs, out, sizes, GreedyMethod())
+///     >>> tree = optimize_code(ixs, out, sizes, TreeSA.fast())
+#[pyfunction]
+#[pyo3(signature = (ixs, out, sizes, optimizer=None))]
+fn optimize_code(
+    ixs: Vec<Vec<i64>>,
+    out: Vec<i64>,
+    sizes: HashMap<i64, usize>,
+    optimizer: Option<PyOptimizer>,
+) -> PyResult<PyNestedEinsum> {
+    let code = EinCode::new(ixs, out);
+
+    let result = match optimizer {
+        Some(PyOptimizer::Greedy(opt)) => opt.inner.optimize(&code, &sizes),
+        Some(PyOptimizer::TreeSA(opt)) => opt.inner.optimize(&code, &sizes),
+        None => GreedyMethod::default().optimize(&code, &sizes),
+    };
+
+    result
+        .map(|inner| PyNestedEinsum { inner })
+        .ok_or_else(|| PyValueError::new_err("Optimization failed"))
+}
+
 /// Python module for omeco tensor network contraction order optimization.
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -365,10 +526,13 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyContractionComplexity>()?;
     m.add_class::<PyGreedyMethod>()?;
     m.add_class::<PyTreeSA>()?;
+    m.add_class::<PyTreeSASlicer>()?;
+    m.add_function(wrap_pyfunction!(optimize_code, m)?)?;
     m.add_function(wrap_pyfunction!(optimize_greedy, m)?)?;
     m.add_function(wrap_pyfunction!(optimize_treesa, m)?)?;
     m.add_function(wrap_pyfunction!(contraction_complexity, m)?)?;
     m.add_function(wrap_pyfunction!(sliced_complexity, m)?)?;
     m.add_function(wrap_pyfunction!(uniform_size_dict, m)?)?;
+    m.add_function(wrap_pyfunction!(slice_code, m)?)?;
     Ok(())
 }

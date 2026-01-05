@@ -99,6 +99,43 @@ print(f"Max difference: {torch.max(torch.abs(result - expected)):.2e}")
 
 See [`examples/pytorch_tensor_network_example.py`](../examples/pytorch_tensor_network_example.py) for a complete example.
 
+## Slicing to Reduce Memory
+
+When space complexity is too high, use `slice_code` to automatically find indices to slice over.
+This trades time for space - each sliced index adds a loop but reduces peak memory.
+
+```python
+from omeco import optimize_code, slice_code, contraction_complexity, sliced_complexity
+from omeco import TreeSA, TreeSASlicer
+
+ixs = [[0, 1], [1, 2], [2, 3]]
+out = [0, 3]
+sizes = {0: 100, 1: 200, 2: 50, 3: 100}
+
+# Step 1: Optimize contraction order
+tree = optimize_code(ixs, out, sizes, TreeSA.fast())
+c = contraction_complexity(tree, ixs, sizes)
+print(f"Original: tc=2^{c.tc:.2f}, sc=2^{c.sc:.2f}")
+
+# Step 2: Slice to reduce memory (target sc=10 means ~1024 elements max)
+slicer = TreeSASlicer.fast().with_sc_target(10.0)
+sliced = slice_code(tree, ixs, sizes, slicer)
+
+c_sliced = sliced_complexity(sliced, ixs, sizes)
+print(f"Sliced:   tc=2^{c_sliced.tc:.2f}, sc=2^{c_sliced.sc:.2f}")
+print(f"Indices to loop over: {sliced.slicing()}")
+```
+
+**TreeSASlicer Parameters:**
+- `sc_target`: Target space complexity (log2 scale). Default: 30.0
+- `ntrials`: Number of parallel optimization trials. Default: 10
+- `niters`: Iterations per temperature level. Default: 10
+- `optimization_ratio`: Controls iteration count for slicing. Default: 2.0
+
+**Presets:**
+- `TreeSASlicer()` - Default configuration
+- `TreeSASlicer.fast()` - Faster but potentially lower quality
+
 ## Rust Quick Start
 
 Two core features are exposed in the quick start below: optimizing contraction

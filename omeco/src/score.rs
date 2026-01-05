@@ -102,6 +102,30 @@ impl ScoreFunction {
     pub fn exceeds_target(&self, sc: f64) -> bool {
         sc > self.sc_target
     }
+
+    /// Builder method to set the space complexity target.
+    pub fn with_sc_target(mut self, sc_target: f64) -> Self {
+        self.sc_target = sc_target;
+        self
+    }
+
+    /// Builder method to set the time complexity weight.
+    pub fn with_tc_weight(mut self, tc_weight: f64) -> Self {
+        self.tc_weight = tc_weight;
+        self
+    }
+
+    /// Builder method to set the space complexity weight.
+    pub fn with_sc_weight(mut self, sc_weight: f64) -> Self {
+        self.sc_weight = sc_weight;
+        self
+    }
+
+    /// Builder method to set the read-write complexity weight.
+    pub fn with_rw_weight(mut self, rw_weight: f64) -> Self {
+        self.rw_weight = rw_weight;
+        self
+    }
 }
 
 #[cfg(test)]

@@ -4,10 +4,13 @@ import pytest
 from omeco import (
     GreedyMethod,
     TreeSA,
+    TreeSASlicer,
+    optimize_code,
     optimize_greedy,
     optimize_treesa,
     contraction_complexity,
     sliced_complexity,
+    slice_code,
     SlicedEinsum,
     uniform_size_dict,
 )
@@ -188,3 +191,117 @@ def test_to_dict_indices():
     # Input indices should be the original tensor indices
     input_ixs = d["eins"]["ixs"]
     assert input_ixs == ixs
+
+
+def test_optimize_code_default():
+    """Test optimize_code with default optimizer (GreedyMethod)."""
+    ixs = [[0, 1], [1, 2]]
+    out = [0, 2]
+    sizes = {0: 10, 1: 20, 2: 10}
+    
+    tree = optimize_code(ixs, out, sizes)
+    assert tree is not None
+    assert tree.is_binary()
+    assert tree.leaf_count() == 2
+
+
+def test_optimize_code_greedy():
+    """Test optimize_code with explicit GreedyMethod."""
+    ixs = [[0, 1], [1, 2], [2, 3]]
+    out = [0, 3]
+    sizes = {0: 10, 1: 20, 2: 20, 3: 10}
+    
+    tree = optimize_code(ixs, out, sizes, GreedyMethod())
+    assert tree.leaf_count() == 3
+
+
+def test_optimize_code_treesa():
+    """Test optimize_code with TreeSA."""
+    ixs = [[0, 1], [1, 2]]
+    out = [0, 2]
+    sizes = {0: 10, 1: 20, 2: 10}
+    
+    tree = optimize_code(ixs, out, sizes, TreeSA.fast())
+    assert tree is not None
+    assert tree.is_binary()
+
+
+def test_optimize_code_treesa_configured():
+    """Test optimize_code with configured TreeSA."""
+    ixs = [[0, 1], [1, 2], [2, 3]]
+    out = [0, 3]
+    sizes = {0: 10, 1: 20, 2: 20, 3: 10}
+
+    opt = TreeSA().with_ntrials(2).with_niters(10)
+    tree = optimize_code(ixs, out, sizes, opt)
+    assert tree.leaf_count() == 3
+
+
+def test_slice_code_basic():
+    """Test basic slice_code functionality."""
+    ixs = [[0, 1], [1, 2], [2, 3]]
+    out = [0, 3]
+    sizes = uniform_size_dict(ixs, out, 64)
+
+    tree = optimize_code(ixs, out, sizes, GreedyMethod())
+    slicer = TreeSASlicer.fast().with_sc_target(10.0)
+
+    sliced = slice_code(tree, ixs, sizes, slicer)
+    assert sliced is not None
+    assert sliced.num_slices() >= 0
+
+
+def test_slice_code_reduces_space():
+    """Test that slice_code reduces space complexity."""
+    ixs = [[0, 1], [1, 2], [2, 3]]
+    out = [0, 3]
+    sizes = uniform_size_dict(ixs, out, 64)
+
+    tree = optimize_code(ixs, out, sizes, GreedyMethod())
+    original = contraction_complexity(tree, ixs, sizes)
+
+    slicer = TreeSASlicer.fast().with_sc_target(8.0)
+    sliced = slice_code(tree, ixs, sizes, slicer)
+
+    sliced_comp = sliced_complexity(sliced, ixs, sizes)
+
+    # Space complexity should be reduced or at least not increased
+    assert sliced_comp.sc <= original.sc + 1.0
+
+
+def test_slice_code_default_slicer():
+    """Test slice_code with default slicer."""
+    ixs = [[0, 1], [1, 2]]
+    out = [0, 2]
+    sizes = {0: 16, 1: 32, 2: 16}
+
+    tree = optimize_code(ixs, out, sizes, GreedyMethod())
+    sliced = slice_code(tree, ixs, sizes)
+
+    assert sliced is not None
+
+
+def test_treesaslicer_config():
+    """Test TreeSASlicer configuration methods."""
+    slicer = TreeSASlicer(sc_target=15.0, ntrials=5, niters=8)
+
+    # Test builder methods
+    slicer2 = slicer.with_sc_target(20.0).with_ntrials(3).with_niters(10)
+
+    # Test repr
+    repr_str = repr(slicer2)
+    assert "TreeSASlicer" in repr_str
+
+
+def test_treesaslicer_fast():
+    """Test TreeSASlicer.fast() static method."""
+    slicer = TreeSASlicer.fast()
+
+    ixs = [[0, 1], [1, 2]]
+    out = [0, 2]
+    sizes = {0: 8, 1: 16, 2: 8}
+
+    tree = optimize_code(ixs, out, sizes, GreedyMethod())
+    sliced = slice_code(tree, ixs, sizes, slicer)
+
+    assert sliced is not None

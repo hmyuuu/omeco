@@ -132,6 +132,7 @@ pub mod greedy;
 pub mod incidence_list;
 pub mod label;
 pub mod score;
+pub mod slicer;
 pub mod treesa;
 pub mod utils;
 
@@ -144,6 +145,7 @@ pub use eincode::{log2_size_dict, uniform_size_dict, EinCode, NestedEinsum, Slic
 pub use greedy::{optimize_greedy, ContractionTree, GreedyMethod, GreedyResult};
 pub use label::Label;
 pub use score::ScoreFunction;
+pub use slicer::{slice_code, CodeSlicer, Slicer, TreeSASlicer};
 pub use treesa::{optimize_treesa, Initializer, TreeSA};
 
 use std::collections::HashMap;

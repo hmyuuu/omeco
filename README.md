@@ -12,10 +12,11 @@ Ported from [OMEinsumContractionOrders.jl](https://github.com/TensorBFS/OMEinsum
 
 When contracting multiple tensors together, the order of contractions significantly affects computational cost. Finding the optimal contraction order is NP-complete, but good heuristics can find near-optimal solutions quickly.
 
-This library provides two optimization algorithms:
+This library provides:
 
-- **GreedyMethod**: Fast O(n² log n) greedy algorithm
-- **TreeSA**: Simulated annealing for higher quality solutions
+- **GreedyMethod**: Fast O(n² log n) greedy algorithm for contraction order
+- **TreeSA**: Simulated annealing for higher quality contraction orders
+- **TreeSASlicer**: Automatic slicing optimization to reduce memory usage
 
 ## Installation
 
@@ -37,22 +38,35 @@ omeco = "0.1"
 ## Python Quick Start
 
 ```python
-from omeco import optimize_greedy, contraction_complexity
+from omeco import (
+    optimize_code, slice_code, contraction_complexity, sliced_complexity,
+    GreedyMethod, TreeSA, TreeSASlicer
+)
 
 # Matrix chain: A[0,1] × B[1,2] × C[2,3] → D[0,3]
 ixs = [[0, 1], [1, 2], [2, 3]]
 out = [0, 3]
 sizes = {0: 100, 1: 200, 2: 50, 3: 100}
 
-# Optimize contraction order
-tree = optimize_greedy(ixs, out, sizes)
-
-# Check complexity
+# 1) Optimize contraction order
+tree = optimize_code(ixs, out, sizes, GreedyMethod())
 complexity = contraction_complexity(tree, ixs, sizes)
 print(f"Time: 2^{complexity.tc:.2f}, Space: 2^{complexity.sc:.2f}")
 
+# 2) Slice to reduce memory (automatic optimization)
+slicer = TreeSASlicer.fast().with_sc_target(10.0)
+sliced = slice_code(tree, ixs, sizes, slicer)
+sliced_comp = sliced_complexity(sliced, ixs, sizes)
+print(f"Sliced indices: {sliced.slicing()}")
+print(f"Sliced space: 2^{sliced_comp.sc:.2f}")
+
 # Use with PyTorch (see examples/pytorch_tensor_network_example.py)
 tree_dict = tree.to_dict()  # Convert to dict for traversal
+
+# Slice to reduce memory (target sc=10 means ~1024 elements max)
+from omeco import slice_code, TreeSASlicer, sliced_complexity
+sliced = slice_code(tree, ixs, sizes, TreeSASlicer.fast().with_sc_target(10.0))
+print(f"Sliced indices: {sliced.slicing()}")
 ```
 
 ## Rust Quick Start
@@ -62,7 +76,8 @@ orders and slicing for lower peak memory.
 
 ```rust
 use omeco::{
-    EinCode, GreedyMethod, SlicedEinsum, contraction_complexity, optimize_code, sliced_complexity,
+    EinCode, GreedyMethod, TreeSASlicer, slice_code,
+    contraction_complexity, optimize_code, sliced_complexity,
 };
 use std::collections::HashMap;
 
@@ -86,10 +101,11 @@ let complexity = contraction_complexity(&optimized, &sizes, &code.ixs);
 println!("Time complexity: 2^{:.2}", complexity.tc);
 println!("Space complexity: 2^{:.2}", complexity.sc);
 
-// 2) Slice to reduce memory (trade time for space)
-let sliced = SlicedEinsum::new(vec!['j'], optimized);
-let sliced_complexity = sliced_complexity(&sliced, &sizes, &code.ixs);
-println!("Sliced space complexity: 2^{:.2}", sliced_complexity.sc);
+// 2) Slice to reduce memory (automatic optimization)
+let slicer = TreeSASlicer::fast().with_sc_target(10.0);
+let sliced = slice_code(&optimized, &sizes, &slicer, &code.ixs).unwrap();
+let sliced_comp = sliced_complexity(&sliced, &sizes, &code.ixs);
+println!("Sliced space complexity: 2^{:.2}", sliced_comp.sc);
 ```
 
 ## Documentation
